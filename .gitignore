@@ -1,8 +1,16 @@
-# http://www.gnu.org/software/automake
 
-Makefile.in
+# umbe stuff
+/serial
+.tm_properties
 
-# http://www.gnu.org/software/autoconf
+# hannes stuff
+/mybuild
+
+
+# svn 
+.svn
+
+# autotools 
 
 /autom4te.cache
 /aclocal.m4
@@ -12,3 +20,5 @@ Makefile.in
 /install-sh
 /missing
 /stamp-h1
+/build-aux
+*.in
