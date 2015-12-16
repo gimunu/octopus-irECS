@@ -57,16 +57,19 @@ program photoelectron_spectrum
   integer, allocatable :: Lp(:,:,:,:,:)
   logical              :: interpol, need_pmesh, resolve_states
   integer              :: ii, i1,i2,i3, idxZero(1:3), st_range(2)
-  type(block_t)        :: blk
+  type(block_t)        :: blk  
   
-  type(space_t)     :: space
-  type(geometry_t)  :: geo
-  type(simul_box_t) :: sb
-  type(states_t)    :: st
-  type(grid_t)      :: gr
-  type(restart_t)   :: restart
+  type(space_t)        :: space
+  type(geometry_t)     :: geo
+  type(simul_box_t)    :: sb
+  type(states_t)       :: st
+  type(grid_t)         :: gr
+  type(restart_t)      :: restart
   
-  character(len=512) :: filename
+  character(len=512)   :: filename
+
+  logical              :: have_zweight_path 
+  integer              :: krng(2), nkpt !< Kpoint range for zero-weight path
 
 
   call getopt_init(ierr)
@@ -118,17 +121,33 @@ program photoelectron_spectrum
   Emin = M_ZERO
   Emax = M_ZERO
 
+  have_zweight_path = .false.
+  if (sb%kpoints%nik_skip > 0) have_zweight_path = .true.
+
   call get_laser_polarization(pol)
   ! if there is no laser set pol along the z-axis
   if (sum(pol(1:3)**2) <= M_EPSILON) pol = (/0,0,1/) 
 
-  
+  ! more defaults
   if(simul_box_is_periodic(sb)) then
-    mode = 7
-!     if(sb%dim == 2 ) mode = 3
-!     if(sb%dim == 3 ) mode = 7
-    if (sb%dim == 2) pol = (/0,1,0/) 
-    if (sb%dim == 3) pol = (/0,0,1/) 
+    if (sb%dim == 2) then
+      ! write the velocity map on plane pz=0 as it contains all the informations
+      mode = 3
+      pol = (/0,1,0/) 
+      pvec = (/0,0,1/)
+    end if
+    if (sb%dim == 3) then 
+      ! write the full ARPES in vtk format (this could be a big file)
+      mode = 7
+      pol = (/0,0,1/) 
+    end if
+    if (have_zweight_path) then
+      ! In this case the output is well defined only on a path in reciprocal space
+      ! so we are going to have only a 2D slice regardless of sb%dim=2 or 3 
+      mode = 3
+      pol = (/0,1,0/) 
+      pvec = (/0,0,1/)
+    end if 
   end if
 
   
@@ -144,7 +163,6 @@ program photoelectron_spectrum
 
   call messages_print_stress(stdout)
   call pes_mask_read_info("td.general/", dim, Emax, Estep, ll(:), Lk, RR)
-
 
   write(message(1), '(a)') 'Read PES info file.'
   call messages_info(1)
@@ -173,31 +191,54 @@ program photoelectron_spectrum
   !% <br>%</tt>
   !%End
   st_range(1:2)=(/1, st%nst/)
+  resolve_states = .false.
   if(parse_block('PhotoelectronSpectrumResolveStates', blk) == 0) then
     if(parse_block_cols(blk,0) < 2) call messages_input_error('PhotoelectronSpectrumResolveStates')
     do idim = 1, 2
       call parse_block_integer(blk, 0, idim - 1, st_range(idim))
     end do
     call parse_block_end(blk)
+    if (abs(st_range(2)-st_range(1)) > 0)resolve_states = .true.    
   else
     call parse_variable('PhotoelectronSpectrumResolveStates', .false., resolve_states)
   end if
   
   
+  krng(1) = 1
+  krng(2) =  kpoints_number(sb%kpoints)
   
-  SAFE_ALLOCATE(Lp(1:ll(1),1:ll(2),1:ll(3),kpoints_number(sb%kpoints),1:3))
+  if (have_zweight_path) then 
+    krng(1) = kpoints_number(sb%kpoints) - sb%kpoints%nik_skip  + 1
+    
+    call messages_print_stress(stdout, "Kpoint selection")
+    write(message(1), '(a)') 'Will use a zero-weight path in reciprocal space with the following points.'
+    call messages_info(1)
+    call write_kpoints_info(sb%kpoints, krng(1), krng(2))    
+    message(1) = "K-points with zero weight path works only with paths along kx."
+    call messages_warning(1)
+    call messages_print_stress(stdout)
+    
+  end if
+  
+  nkpt = krng(2) - krng(1) + 1
 
-  ll(1:sb%dim) = ll(1:sb%dim) * sb%kpoints%nik_axis(1:sb%dim)
+  
+  SAFE_ALLOCATE(Lp(1:ll(1),1:ll(2),1:ll(3),krng(1):krng(2),1:3))
+ 
+  if (have_zweight_path) then
+    ll(1) = ll(1) * nkpt     
+  else
+    ll(1:sb%dim) = ll(1:sb%dim) * sb%kpoints%nik_axis(1:sb%dim)    
+  endif  
 
   SAFE_ALLOCATE(pmesh(1:ll(1),1:ll(2),1:ll(3),1:3 + 1))
 
-  call pes_mask_pmesh(sb%dim, sb%kpoints, lll, Lk, pmesh, Lp, idxZero)  
+  call pes_mask_pmesh(sb%dim, sb%kpoints, lll, Lk, pmesh, idxZero, krng, Lp)  
  
   SAFE_ALLOCATE(pesk(1:ll(1),1:ll(2),1:ll(3)))
   
-  call pes_mask_map_from_states(restart, st, lll, pesk, Lp)
+  call pes_mask_map_from_states(restart, st, lll, pesk, krng, Lp)
 
-  call restart_end(restart)    
   
   if (.not. simul_box_is_periodic(sb) .or. kpoints_number(sb%kpoints) == 1) then
     ! There is no need to use pmesh we just need to sort Lk in place
@@ -206,16 +247,6 @@ program photoelectron_spectrum
       call sort(Lk(1:ll(idim), idim)) 
     end do  
   end if  
-    
-!   if(.false.)
-!     !Read directly from the obf file
-!     filename=io_workpath('td.general/PESM_map.obf')
-!     call io_binary_read(trim(filename),ll(1)*ll(2)*ll(3),pesk, ierr)
-!     if(ierr > 0) then
-!       message(1) = "Failed to read file "//trim(filename)
-!       call messages_fatal(1)
-!     end if
-!   end if
 
 
   write(message(1), '(a)') 'Read PES restart files.'
@@ -265,7 +296,11 @@ program photoelectron_spectrum
     if(sum((pvec-(/0 ,1 ,0/))**2)  <= M_EPSILON  )  dir = 2
     if(sum((pvec-(/0 ,0 ,1/))**2)  <= M_EPSILON  )  dir = 3
 
-    filename = "PES_velocity_map.p"//index2axis(dir)//"=0"
+    if (have_zweight_path) then
+      filename = "PES_velocity_map.ppath"
+    else
+      filename = "PES_velocity_map.p"//index2axis(dir)//"=0"
+    end if
 
 
     if (dir == -1) then
@@ -353,6 +388,8 @@ program photoelectron_spectrum
 
   call messages_print_stress(stdout)
 
+  call restart_end(restart)    
+
   call states_end(st)
 
   call geometry_end(geo)
@@ -369,6 +406,33 @@ program photoelectron_spectrum
   SAFE_DEALLOCATE_P(Lk)
   
   contains
+    
+    subroutine write_kpoints_info(kpoints, ikstart, ikend)
+      type(kpoints_t),   intent(in) :: kpoints 
+      integer,           intent(in) :: ikstart   
+      integer,           intent(out):: ikend  
+
+      integer :: ik, idir
+      character(len=100) :: str_tmp
+            
+      PUSH_SUB(write_kpoints_info)
+
+      do ik = ikstart, ikend
+        write(message(1),'(i8,1x)') ik
+        do idir = 1, kpoints%full%dim
+          write(str_tmp,'(f12.4)') kpoints%reduced%red_point(idir, ik)
+          message(1) = trim(message(1)) // trim(str_tmp)
+        end do
+        write(str_tmp,'(f12.4)') kpoints_get_weight(kpoints, ik)
+        message(1) = trim(message(1)) // trim(str_tmp)
+        call messages_info(1)
+      end do
+      
+      call messages_info(1)
+      POP_SUB(write_kpoints_info)
+      
+    end subroutine write_kpoints_info
+
 
     subroutine get_laser_polarization(lPol)
        FLOAT,   intent(out) :: lPol(:) 
@@ -453,24 +517,29 @@ program photoelectron_spectrum
        end do
        
        
-       POP_SUB(flip_sign_kpt_idx)      
+       POP_SUB(flip_sign_Lkpt_idx)      
     end subroutine flip_sign_Lkpt_idx
     
     !< Generate the momentum-space mesh (p) and the arrays mapping the 
     !< the mask and the kpoint meshes in p.
-    subroutine pes_mask_pmesh(dim, kpoints, ll, LG, pmesh, Lp, idxZero)
+    subroutine pes_mask_pmesh(dim, kpoints, ll, LG, pmesh, idxZero, krng, Lp)
+!     subroutine pes_mask_pmesh(dim, kpoints, ll, LG, idxZero, krng)
       integer,           intent(in)    :: dim
       type(kpoints_t),   intent(inout) :: kpoints 
       integer,           intent(in)    :: ll(:)             !< ll(1:dim): the dimensions of the mask-mesh
       FLOAT,             intent(in)    :: LG(:,:)           !< LG(1:maxval(ll),1:dim): the mask-mesh points  
-      FLOAT,             intent(out)   :: pmesh(:,:,:,:)    !< pmesh(i1,i2,i3,1:dim): contains the positions of point 
-                                                          !< in the final mesh in momentum space "p" combining the 
-                                                          !< mask-mesh with kpoints. 
-      integer,           intent(out) :: Lp(:,:,:,:,:)     !< Lp(1:ll(1),1:ll(2),1:ll(3),1:nkpt,1:dim): maps a 
-                                                          !< mask-mesh triplet of indices together with a kpoint 
-                                                          !< index into a triplet on the combined momentum space mesh.
+      FLOAT,             intent(out)   :: pmesh(:,:,:,:)    !< pmesh(i1,i2,i3,1:dim): contains the positions of point
+                                                            !< in the final mesh in momentum space "p" combining the 
+      integer,           intent(out) :: idxZero(:)          !< The triplet identifying the zero of the coordinates           
 
-      integer,           intent(out) :: idxZero(:)       !< The triplet identifying the zero of the coordinates                  
+      integer,           intent(in)  :: krng(:)             !< The range identifying the zero-weight path 
+                                                            !< mask-mesh with kpoints. 
+      integer,  dimension(1:ll(1),1:ll(2),1:ll(3),krng(1):krng(2),1:3), intent(inout) :: Lp  
+                                                            !< maps a mask-mesh triplet of indices together with a kpoint 
+                                                            !< index into a triplet on the combined momentum space mesh.
+
+       
+
   
       integer :: ik, j1, j2, j3, nk(1:3), ip1, ip2, ip3, idir, err
       FLOAT :: kpt(1:3),GG(1:3)
@@ -478,19 +547,42 @@ program photoelectron_spectrum
       integer, allocatable :: Lkpt(:,:), idx(:,:), idx_inv(:,:), ikidx(:,:)
       FLOAT, allocatable   :: LG_(:,:)
       
+      integer :: nkpt
+  
   
       PUSH_SUB(pes_mask_pmesh)
-
-      SAFE_ALLOCATE(Lkpt(1:kpoints_number(kpoints),1:3))
             
+      nkpt = krng(2) - krng(1) + 1
+
+      SAFE_ALLOCATE(Lkpt(krng(1):krng(2),1:3))
+          
       nk(:) = 1  
       nk(1:dim) = kpoints%nik_axis(1:dim)
 
       Lkpt(:,:) = 1
       kpt(:) = M_ZERO
-            
-      call kpoints_grid_generate(dim, kpoints%nik_axis(1:dim), kpoints%shifts(1:dim), &
-                                 kpoints%full%red_point,  Lkpt(:,1:dim))
+          
+      if (have_zweight_path) then 
+        ! regardless the orientation of the kpath in recirpocal space
+        ! we lay it down on the kx axis 
+        nk(1)     = nkpt
+        nk(2:dim) = 1
+!         SAFE_ALLOCATE(ikidx(1:nkpt,1:3))
+!         call flip_sign_Lkpt_idx(sb%dim, nk(:), ikidx(:,:))
+!         ikidx = 1
+        do ik = 1 , nkpt
+          Lkpt(krng(1)+ik-1,1) = ik
+!           ikidx(ik,1) = ik
+!           print *, "Lkpt(", krng(1)+ik-1,") = ", Lkpt(krng(1)+ik-1,1:3)
+!           print *, " ikidx(", ik , ") =", ikidx(ik,1:3)
+    
+        end do
+        
+
+        
+      else  
+        call kpoints_grid_generate(dim, kpoints%nik_axis(1:dim), kpoints%shifts(1:dim), &
+                                   kpoints%full%red_point,  Lkpt(:,1:dim))
 
 !       do ik = 1, kpoints_number(kpoints)
 !         kpt(1:sb%dim) = kpoints_get_point(kpoints, ik, absolute_coordinates = .true.)
@@ -498,21 +590,22 @@ program photoelectron_spectrum
 !       end do
 
 
+      end if
+
       SAFE_ALLOCATE(ikidx(maxval(nk(1:3)),1:3))
       call flip_sign_Lkpt_idx(sb%dim, nk(:), ikidx(:,:))
-
-!       print *,"reordered"
-!       do ik = 1, kpoints_number(kpoints)
-!         kpt(1:sb%dim) = kpoints_get_point(kpoints, ik, absolute_coordinates = .true.)
-!         print *, ik, "Lkpt(ik)= ", ikidx(Lkpt(ik,1),1), "-- kpt= ",kpt(1)
-!       end do
       
+      if (in_debug_mode) then
+        print *,"reordered"
+        do ik = krng(1),krng(2)
+          kpt(1:sb%dim) = kpoints_get_point(kpoints, ik, absolute_coordinates = .false.)
+          print *, ik, "Lkpt(ik)= [", ikidx(Lkpt(ik,1),1), ikidx(Lkpt(ik,2),2), ikidx(Lkpt(ik,3),3),"] -- kpt= ",kpt(1)
+        end do
 
-
-!       print *,"----"
-!       print *,"ll(:)", ll(:)
-!       print *,"----"
-      
+        print *,"----"
+        print *,"ll(:)", ll(:)
+        print *,"----"
+      end if
       
       ! We want the results to be sorted on a cube i,j,k
       ! with the first triplet associated with the smallest positions 
@@ -527,14 +620,16 @@ program photoelectron_spectrum
         idx_inv(:,idir) = idx(:,idir)
         call sort(idx(1:ll(idir),idir),idx_inv(1:ll(idir),idir))
       end do  
-
-!       do j1 = 1, ll(1)
-!         print *,j1, "LG = ",LG(j1,1),"LG_ = ",LG_(j1,1), "idx = ", idx(j1,1), "idx_inv = ", idx_inv(j1,1)
-!       end do
       
+      if(in_debug_mode) then
+        do j1 = 1, ll(1)
+          print *,j1, "LG = ",LG(j1,1),"LG_ = ",LG_(j1,1), "idx = ", idx(j1,1), "idx_inv = ", idx_inv(j1,1)
+        end do
+      end if
+  
       pmesh(:, :, :, :) = M_HUGE      
       pmesh(:, :, :, dim+1) = M_ZERO   
-      Lp = 0   
+      Lp(:,:,:,:,:) = 0   
       err = -1
       
       ! Generate the p-space mesh and populate Lp.
@@ -551,7 +646,7 @@ program photoelectron_spectrum
       ! The grid represents the final momentum p = G + Kpt. 
       ! The lower left corner correspond to the minimum value of p and the lowest 
       ! index-touple value (ip1,ip2,ip3) = (1,1,1). 
-      do ik = 1, kpoints_number(kpoints)
+      do ik = krng(1),krng(2)
         kpt(1:dim) = kpoints_get_point(kpoints, ik) 
         do j1 = 1, ll(1) 
           do j2 = 1, ll(2) 
@@ -559,12 +654,8 @@ program photoelectron_spectrum
 
               GG(1:3)= (/LG_(j1,1),LG_(j2,2),LG_(j3,3)/)
               
-!               ip1 = (j1 - 1) * nk(1) + Lkpt(ik,1)
-!               ip2 = (j2 - 1) * nk(2) + Lkpt(ik,2)
-!               ip3 = (j3 - 1) * nk(3) + Lkpt(ik,3)
-
-              ip1 = (j1 - 1) * nk(1) + ikidx(Lkpt(ik,1), 1) 
-              ip2 = (j2 - 1) * nk(2) + ikidx(Lkpt(ik,2), 2) 
+              ip1 = (j1 - 1) * nk(1) + ikidx(Lkpt(ik,1), 1)
+              ip2 = (j2 - 1) * nk(2) + ikidx(Lkpt(ik,2), 2)
               ip3 = (j3 - 1) * nk(3) + ikidx(Lkpt(ik,3), 3)
               
               Lp(idx_inv(j1,1),idx_inv(j2,2),idx_inv(j3,3),ik,1:3) =  (/ip1,ip2,ip3/)
@@ -581,7 +672,7 @@ program photoelectron_spectrum
               pmesh(ip1, ip2, ip3, dim+1) = pmesh(ip1, ip2, ip3, dim+1) + 1 
               
 !               print *,idx_inv(j1,1),idx_inv(j2,2),idx_inv(j3,3),ik,"  Lp(i1,i2,i3,ik,1:dim) = ",  (/ip1,ip2,ip3/)
-!               print *, "pmesh = ",pmesh(ip1, ip2, ip3, 1:dim) !,"  GG = ",  GG (1:dim), "  kpt = ", kpt(1:dim)
+!               print *, "pmesh = ",pmesh(ip1, ip2, ip3, :) !,"  GG = ",  GG (1:dim), "  kpt = ", kpt(1:dim)
 
 
 
@@ -636,26 +727,30 @@ program photoelectron_spectrum
 
 
     !< Build the photoemission map form the restart files
-    subroutine pes_mask_map_from_states(restart, st, ll, pesK, Lp)
+    subroutine pes_mask_map_from_states(restart, st, ll, pesK, krng, Lp)
       type(restart_t),    intent(in) :: restart
       type(states_t),     intent(in) :: st
       integer,            intent(in) :: ll(:)
       FLOAT, target,     intent(out) :: pesK(:,:,:)
-      integer, optional,  intent(in) :: Lp(:,:,:,:,:)
+      integer,           intent(in)  :: krng(:) 
+      integer,  dimension(1:ll(1),1:ll(2),1:ll(3),krng(1):krng(2),1:3), intent(in) :: Lp
       
-      integer :: ik, ist, idim, itot
+      integer :: ik, ist, idim, itot, nkpt
       integer :: i1, i2, i3, ip(1:3)
       integer :: idone, ntodo
       CMPLX   :: psiG(1:ll(1),1:ll(2),1:ll(3))
+      FLOAT   :: weight 
 
       PUSH_SUB(pes_mask_map_from_states)
   
-      ntodo = st%d%kpt%nglobal * st%nst * st%d%dim
+      nkpt =  krng(2)-krng(1)+1
+!       ntodo = st%d%kpt%nglobal * st%nst * st%d%dim
+      ntodo = nkpt * st%nst * st%d%dim
       idone = 0 
       call loct_progress_bar(-1, ntodo)
       
       pesK = M_ZERO
-      do ik = 1, st%d%kpt%nglobal
+      do ik = krng(1), krng(2)
         do ist = 1, st%nst
           do idim = 1, st%d%dim
             itot = ist + (ik-1) * st%nst +  (idim-1) * st%nst * st%d%kpt%nglobal
@@ -666,8 +761,14 @@ program photoelectron_spectrum
                 do i3=1, ll(3)
                   ip(1:3) = Lp(i1, i2, i3, ik, 1:3) 
                   
+                  if (have_zweight_path) then
+                    weight = st%occ(ist, ik)
+                  else
+                    weight = st%occ(ist, ik) * st%d%kweights(ik)
+                  end if
+                  
                   pesK(ip(1),ip(2),ip(3)) = pesK(ip(1),ip(2),ip(3)) &
-                    + abs(psiG(i1,i2,i3))**2 * st%occ(ist, ik) * st%d%kweights(ik)
+                    + abs(psiG(i1,i2,i3))**2 * weight 
                                           
                 end do
               end do
