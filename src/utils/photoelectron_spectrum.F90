@@ -145,8 +145,8 @@ program photoelectron_spectrum
       ! In this case the output is well defined only on a path in reciprocal space
       ! so we are going to have only a 2D slice regardless of sb%dim=2 or 3 
       mode = 3
-      pol = (/0,1,0/) 
-      pvec = (/0,0,1/)
+      pol = (/0,0,1/) 
+      pvec = (/0,1,0/)
     end if 
   end if
 
@@ -419,12 +419,13 @@ program photoelectron_spectrum
 
       do ik = ikstart, ikend
         write(message(1),'(i8,1x)') ik
+        write(str_tmp,'(f12.6)') kpoints_get_weight(kpoints, ik)
+        message(1) = trim(message(1)) // trim(str_tmp)//' |'
         do idir = 1, kpoints%full%dim
-          write(str_tmp,'(f12.4)') kpoints%reduced%red_point(idir, ik)
+          write(str_tmp,'(f12.6)') kpoints%reduced%red_point(idir, ik)
           message(1) = trim(message(1)) // trim(str_tmp)
         end do
-        write(str_tmp,'(f12.4)') kpoints_get_weight(kpoints, ik)
-        message(1) = trim(message(1)) // trim(str_tmp)
+        message(1) = trim(message(1)) //' |'
         call messages_info(1)
       end do
       
@@ -546,8 +547,10 @@ program photoelectron_spectrum
 
       integer, allocatable :: Lkpt(:,:), idx(:,:), idx_inv(:,:), ikidx(:,:)
       FLOAT, allocatable   :: LG_(:,:)
-      
+  
       integer :: nkpt
+      FLOAT :: zero_thr
+      logical :: kpath_has_gamma
   
   
       PUSH_SUB(pes_mask_pmesh)
@@ -562,6 +565,9 @@ program photoelectron_spectrum
       Lkpt(:,:) = 1
       kpt(:) = M_ZERO
           
+      zero_thr = M_EPSILON    
+      kpath_has_gamma = .false.
+          
       if (have_zweight_path) then 
         ! regardless the orientation of the kpath in recirpocal space
         ! we lay it down on the kx axis 
@@ -575,11 +581,16 @@ program photoelectron_spectrum
 !           ikidx(ik,1) = ik
 !           print *, "Lkpt(", krng(1)+ik-1,") = ", Lkpt(krng(1)+ik-1,1:3)
 !           print *, " ikidx(", ik , ") =", ikidx(ik,1:3)
-    
+          kpt(1:dim) = kpoints_get_point(kpoints, krng(1) + ik -1) 
+          if ( sum(kpt(1:dim)**2) <= M_EPSILON )  kpath_has_gamma = .true.
         end do
         
-
         
+        if (.not. kpath_has_gamma) then
+          kpt(1:dim) = kpoints_get_point(kpoints, krng(1))-kpoints_get_point(kpoints, krng(1)+1)
+          zero_thr = sum(kpt(1:dim)**2)
+        end if    
+            
       else  
         call kpoints_grid_generate(dim, kpoints%nik_axis(1:dim), kpoints%shifts(1:dim), &
                                    kpoints%full%red_point,  Lkpt(:,1:dim))
@@ -677,8 +688,9 @@ program photoelectron_spectrum
 
 
               ! Sanity checks
-              if (sum(pmesh(ip1, ip2, ip3, 1:dim)**2)<=M_EPSILON) then
+              if (sum(pmesh(ip1, ip2, ip3, 1:dim)**2)<=zero_thr) then
                 err = err + 1 
+                !Find the indices identifying the center of the coordinates 
                 idxZero(1:3) = (/ip1,ip2,ip3/)
               end if
               
@@ -704,8 +716,9 @@ program photoelectron_spectrum
       end if 
 
       if (err > 1) then
-        write(message(1), '(a)') 'Illformed momentum-space mesh: too many points with p = 0 coordinate.'
-        call messages_fatal(1)
+        write(message(1), '(a)') 'Illformed momentum-space mesh: more than in point with p = 0 coordinate.'
+        write(message(1), '(a)') 'This can happen only if the kpoint mesh does not contain gamma.'
+        call messages_warning(1)
       end if 
 
       if (err == -2) then
