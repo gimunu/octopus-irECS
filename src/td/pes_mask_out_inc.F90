@@ -80,7 +80,7 @@ subroutine pes_mask_pmesh(dim, kpoints, ll, LG, pmesh, idxZero, krng, Lp)
   integer, allocatable :: Lkpt(:,:), idx(:,:), idx_inv(:,:), ikidx(:,:)
   FLOAT, allocatable   :: LG_(:,:)
 
-  integer :: nkpt
+  integer :: nkpt, kpth_dir
   FLOAT :: zero_thr
   logical :: kpath_has_gamma
 
@@ -102,18 +102,20 @@ subroutine pes_mask_pmesh(dim, kpoints, ll, LG, pmesh, idxZero, krng, Lp)
   kpath_has_gamma = .false.
       
   if ( kpoints_have_zero_weight_path(kpoints)) then 
-    ! regardless the orientation of the kpath in recirpocal space
-    ! we lay it down on the kx axis 
-    nk(1)     = nkpt
-    nk(2:dim) = 1
-!         SAFE_ALLOCATE(ikidx(1:nkpt,1:3))
-!         call flip_sign_Lkpt_idx(sb%dim, nk(:), ikidx(:,:))
-!         ikidx = 1
+    kpth_dir = -1 
+    if (size(pmesh, 1) > ll(1)) kpth_dir = 1
+    if (size(pmesh, 2) > ll(2)) kpth_dir = 2
+    print *, "kpth_dir", kpth_dir
+    print *, "shape(pmesh)", shape(pmesh)
+    print *, "ll", ll(:)
+    
+
+    ASSERT (kpth_dir /= -1 )
+    
+    nk(:) = 1  
+    nk(kpth_dir) = nkpt
     do ik = 1 , nkpt
-      Lkpt(krng(1)+ik-1,1) = ik
-!           ikidx(ik,1) = ik
-!           print *, "Lkpt(", krng(1)+ik-1,") = ", Lkpt(krng(1)+ik-1,1:3)
-!           print *, " ikidx(", ik , ") =", ikidx(ik,1:3)
+      Lkpt(krng(1)+ik-1,kpth_dir) = ik
       kpt(1:dim) = kpoints_get_point(kpoints, krng(1) + ik -1) 
       if ( sum(kpt(1:dim)**2) <= M_EPSILON )  kpath_has_gamma = .true.
     end do

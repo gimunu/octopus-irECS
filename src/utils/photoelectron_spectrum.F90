@@ -69,7 +69,7 @@ program photoelectron_spectrum
   character(len=512)   :: filename
 
   logical              :: have_zweight_path 
-  integer              :: krng(2), nkpt !< Kpoint range for zero-weight path
+  integer              :: krng(2), nkpt, kpth_dir !< Kpoint range for zero-weight path
 
 
   call getopt_init(ierr)
@@ -153,13 +153,6 @@ program photoelectron_spectrum
   
   
   
-  call getopt_photoelectron_spectrum(mode,interp,uEstep, uEspan,&
-                                     uThstep, uThspan, uPhstep, &
-                                     uPhspan, pol, center, pvec, integrate)
-                                     
-  call getopt_end()
-                                       
-  if(interp  ==  0) interpol = .false.
 
   call messages_print_stress(stdout)
   call pes_mask_read_info("td.general/", dim, Emax, Estep, ll(:), Lk, RR)
@@ -211,11 +204,12 @@ program photoelectron_spectrum
     krng(1) = kpoints_number(sb%kpoints) - sb%kpoints%nik_skip  + 1
     
     call messages_print_stress(stdout, "Kpoint selection")
-    write(message(1), '(a)') 'Will use a zero-weight path in reciprocal space with the following points.'
+    write(message(1), '(a)') 'Will use a zero-weight path in reciprocal space with the following points'
     call messages_info(1)
+    ! Figure out the direction of the path - it must be along kx or ky only
+    call get_kpath_direction(sb%kpoints, krng, kpth_dir, pvec)
+    
     call write_kpoints_info(sb%kpoints, krng(1), krng(2))    
-    message(1) = "K-points with zero weight path works only with paths along kx."
-    call messages_warning(1)
     call messages_print_stress(stdout)
     
   end if
@@ -226,7 +220,9 @@ program photoelectron_spectrum
   SAFE_ALLOCATE(Lp(1:ll(1),1:ll(2),1:ll(3),krng(1):krng(2),1:3))
  
   if (have_zweight_path) then
-    ll(1) = ll(1) * nkpt     
+    ll(kpth_dir) = ll(kpth_dir) * nkpt    
+    print *, "ll", ll(:) 
+    print *, "lll", lll(:) 
   else
     ll(1:sb%dim) = ll(1:sb%dim) * sb%kpoints%nik_axis(1:sb%dim)    
   endif  
@@ -251,6 +247,19 @@ program photoelectron_spectrum
 
   write(message(1), '(a)') 'Read PES restart files.'
   call messages_info(1)
+
+
+  ! Read options from command line
+  ! TODO: many options should be moved into octopus format in order to 
+  ! have more flexibility to combine them 
+  call getopt_photoelectron_spectrum(mode,interp,uEstep, uEspan,&
+                                     uThstep, uThspan, uPhstep, &
+                                     uPhspan, pol, center, pvec, integrate)
+                                     
+  call getopt_end()
+                                       
+  if(interp  ==  0) interpol = .false.
+
 
   !! set user values
   if(uEstep >  0 .and. uEstep > Estep)    Estep = uEstep
@@ -297,7 +306,7 @@ program photoelectron_spectrum
     if(sum((pvec-(/0 ,0 ,1/))**2)  <= M_EPSILON  )  dir = 3
 
     if (have_zweight_path) then
-      filename = "PES_velocity_map.ppath"
+      filename = "PES_velocity_map.path"
     else
       filename = "PES_velocity_map.p"//index2axis(dir)//"=0"
     end if
@@ -407,6 +416,47 @@ program photoelectron_spectrum
   
   contains
     
+    subroutine get_kpath_direction(kpoints, krng, kpth_dir, pvec)
+      type(kpoints_t),   intent(in)  :: kpoints 
+      integer,           intent(in)  :: krng(2)
+      integer,           intent(out) :: kpth_dir
+      FLOAT,             intent(out) :: pvec(3)
+
+         
+      FLOAT                :: kpt(3)
+         
+      PUSH_SUB(get_kpath_direction)
+      
+      kpth_dir = -1
+         
+      kpt = M_ZERO
+      kpt(1:dim) = kpoints_get_point(kpoints, krng(1)+1)-kpoints_get_point(kpoints, krng(1))
+      kpt(1:dim) = kpt(1:dim)/sqrt(sum(kpt(1:dim)**2))  
+           
+      if (sum((kpt(:) - (/1,0,0/))**2) < M_EPSILON) then
+        kpth_dir = 1
+        write(message(1), '(a)') 'along kx'
+        pvec = (/0,1,0/)
+      end if        
+              
+      if (sum((kpt(:) - (/0,1,0/))**2) < M_EPSILON) then 
+        kpth_dir = 2
+        write(message(1), '(a)') 'along ky'
+        pvec = (/1,0,0/)        
+      end if
+      
+      call messages_info(1)
+      
+    
+      if (kpth_dir == -1) then
+        message(1) = "K-points with zero weight path works only with paths along kx or ky."
+        call messages_fatal(1)
+      end if
+      
+      POP_SUB(get_kpath_direction)      
+    end subroutine get_kpath_direction
+
+    
     subroutine write_kpoints_info(kpoints, ikstart, ikend)
       type(kpoints_t),   intent(in) :: kpoints 
       integer,           intent(in) :: ikstart   
@@ -430,10 +480,9 @@ program photoelectron_spectrum
       end do
       
       call messages_info(1)
-      POP_SUB(write_kpoints_info)
       
+      POP_SUB(write_kpoints_info)
     end subroutine write_kpoints_info
-
 
     subroutine get_laser_polarization(lPol)
        FLOAT,   intent(out) :: lPol(:) 
