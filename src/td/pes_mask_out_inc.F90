@@ -102,14 +102,11 @@ subroutine pes_mask_pmesh(dim, kpoints, ll, LG, pmesh, idxZero, krng, Lp)
   kpath_has_gamma = .false.
       
   if ( kpoints_have_zero_weight_path(kpoints)) then 
+    ! supporting paths only along the kx and ky directions in 
+    ! reciprocal space
     kpth_dir = -1 
     if (size(pmesh, 1) > ll(1)) kpth_dir = 1
     if (size(pmesh, 2) > ll(2)) kpth_dir = 2
-    print *, "kpth_dir", kpth_dir
-    print *, "shape(pmesh)", shape(pmesh)
-    print *, "ll", ll(:)
-    
-
     ASSERT (kpth_dir /= -1 )
     
     nk(:) = 1  

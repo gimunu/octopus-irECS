@@ -221,8 +221,6 @@ program photoelectron_spectrum
  
   if (have_zweight_path) then
     ll(kpth_dir) = ll(kpth_dir) * nkpt    
-    print *, "ll", ll(:) 
-    print *, "lll", lll(:) 
   else
     ll(1:sb%dim) = ll(1:sb%dim) * sb%kpoints%nik_axis(1:sb%dim)    
   endif  
