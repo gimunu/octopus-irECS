@@ -47,6 +47,13 @@ program photoelectron_spectrum
   
   implicit none
 
+  type pesoutput_t
+    integer     :: what  
+    logical     :: interpol
+    FLOAT       :: pol(3)
+    FLOAT       :: pvec(3)        
+  end type pesoutput_t  
+
   integer              :: ierr, mode, interp, integrate
   integer              :: dim, ll(3), lll(3), dir, how, idim
   FLOAT                :: Emax, Emin, Estep, uEstep,uEspan(2), pol(3)
@@ -70,6 +77,8 @@ program photoelectron_spectrum
 
   logical              :: have_zweight_path 
   integer              :: krng(2), nkpt, kpth_dir !< Kpoint range for zero-weight path
+
+  type(pesoutput_t)    :: pesout
 
 
   call getopt_init(ierr)
@@ -121,6 +130,10 @@ program photoelectron_spectrum
   Emin = M_ZERO
   Emax = M_ZERO
 
+  pesout%what = OPTION__PHOTOELECTRONSPECTRUMOUTPUT__ENERGY_TOT 
+  pesout%pvec = (/1,0,0/)
+  pesout%interpol = .true.
+
   have_zweight_path = kpoints_have_zero_weight_path(sb%kpoints)
 !   if (sb%kpoints%nik_skip > 0) have_zweight_path = .true.
 
@@ -135,11 +148,18 @@ program photoelectron_spectrum
       mode = 3
       pol = (/0,1,0/) 
       pvec = (/0,0,1/)
+      
+      pesout%what = OPTION__PHOTOELECTRONSPECTRUMOUTPUT__VELOCITY_MAP_CUT 
+      pesout%pol = (/0,1,0/) 
+      pesout%pvec = (/0,0,1/)
     end if
     if (sb%dim == 3) then 
       ! write the full ARPES in vtk format (this could be a big file)
       mode = 7
       pol = (/0,0,1/) 
+      
+      pesout%what = OPTION__PHOTOELECTRONSPECTRUMOUTPUT__ARPES
+      pesout%pol = (/0,0,1/) 
     end if
     if (have_zweight_path) then
       ! In this case the output is well defined only on a path in reciprocal space
@@ -147,6 +167,10 @@ program photoelectron_spectrum
       mode = 3
       pol = (/0,0,1/) 
       pvec = (/0,1,0/)
+
+      pesout%what = OPTION__PHOTOELECTRONSPECTRUMOUTPUT__VELOCITY_MAP_CUT
+      pesout%pol = (/0,0,1/) 
+      pesout%pvec = (/0,1,0/)
     end if 
   end if
 
@@ -226,11 +250,10 @@ program photoelectron_spectrum
   endif  
 
   SAFE_ALLOCATE(pmesh(1:ll(1),1:ll(2),1:ll(3),1:3 + 1))
+  SAFE_ALLOCATE(pesk(1:ll(1),1:ll(2),1:ll(3)))
 
   call pes_mask_pmesh(sb%dim, sb%kpoints, lll, Lk, pmesh, idxZero, krng, Lp)  
- 
-  SAFE_ALLOCATE(pesk(1:ll(1),1:ll(2),1:ll(3)))
-  
+   
   call pes_mask_map_from_states(restart, st, lll, pesk, krng, Lp)
 
   
@@ -246,11 +269,43 @@ program photoelectron_spectrum
   write(message(1), '(a)') 'Read PES restart files.'
   call messages_info(1)
 
-
+  !%Variable PhotoelectronSpectrumOutput
+  !%Type flag
+  !%Default none
+  !%Section Utilities::oct-photoelectron_spectrum
+  !%Description
+  !% Specifies what to output extracting the photoelectron cross-section informations. 
+  !% When we use polar coordinates the zenith axis is set by vec (default is the first 
+  !% laser field polarization vector), theta is the inclination angle measured from 
+  !% vec (from 0 to \pi), and phi is the azimuthal angle on a plane perpendicular to 
+  !% vec (from 0 to 2\pi).
+  !% Example: <tt>energy_tot + velocity_map</tt>
+  !%Option energy_tot bit(1)
+  !% Output the energy-resolved photoelectron spectrum: E.
+  !%Option energy_angle bit(2)
+  !% Output the energy and angle resolved spectrum: (theta, E)
+  !% The result is integrated over phi.
+  !%Option velocity_map_cut bit(3)
+  !% Velocity map on a plane orthogonal to pvec: (px, py). The allowed cutting planes 
+  !% (pvec) can only be parallel to the x,y,z=0 planes. 
+  !% Space is oriented so that the z-axis is along vec. Supports the -I option.
+  !%Option energy_xy bit(4)  
+  !% Angle and energy-resolved spectrum on the inclination plane: (Ex, Ey).
+  !% The result is integrated over ph;
+  !%Option energy_th_ph bit(5)  
+  !% Ionization probability integrated on spherical cuts: (theta, phi).
+  !%Option velocity_map bit(6)
+  !% Full momentum-resolved ionization probability: (px, py, pz).     
+  !% The output format can be controlled with OutputHow and can be vtk or ncdf.  
+  !%Option arpes bit(7)
+  !% Full ARPES for semi-periodic systems (vtk).
+  !%End
+  call parse_variable('PhotoelectronSpectrumOutput', pesout%what, pesout%what)
+  
   ! Read options from command line
   ! TODO: many options should be moved into octopus format in order to 
   ! have more flexibility to combine them 
-  call getopt_photoelectron_spectrum(mode,interp,uEstep, uEspan,&
+  call getopt_photoelectron_spectrum(interp,uEstep, uEspan,&
                                      uThstep, uThspan, uPhstep, &
                                      uPhspan, pol, center, pvec, integrate)
                                      
@@ -281,113 +336,8 @@ program photoelectron_spectrum
     end forall
   end if
 
-  ! choose what to calculate
-  ! these functions are defined in pes_mask_out_inc.F90
-  select case(mode)
-  case(1) ! Energy-resolved
-    write(message(1), '(a)') 'Save energy-resolved PES'
-    call messages_info(1)
-    call pes_mask_output_power_totalM(pesk,'./PES_power.sum', Lk, ll, dim, Emax, Estep, interpol)
- 
- 
-  case(2) ! Angle and energy resolved
-    write(message(1), '(a)') 'Save angle- and energy-resolved PES'
-    call messages_info(1)
-    call pes_mask_output_ar_polar_M(pesk,'./PES_angle_energy.map', Lk, ll, dim, pol, Emax, Estep)
 
-
-  case(3) ! On a plane
-    
-    dir = -1
-    if(sum((pvec-(/1 ,0 ,0/))**2)  <= M_EPSILON  )  dir = 1
-    if(sum((pvec-(/0 ,1 ,0/))**2)  <= M_EPSILON  )  dir = 2
-    if(sum((pvec-(/0 ,0 ,1/))**2)  <= M_EPSILON  )  dir = 3
-
-    if (have_zweight_path) then
-      filename = "PES_velocity_map.path"
-    else
-      filename = "PES_velocity_map.p"//index2axis(dir)//"=0"
-    end if
-
-
-    if (dir == -1) then
-        write(message(1), '(a)') 'Unrecognized plane. Use -u to change.'
-        call messages_fatal(1)
-      else
-        write(message(1), '(a)') 'Save velocity map on plane: '//index2axis(dir)//" = 0"
-        call messages_info(1)
-    end if 
-    
-    if(integrate /= INTEGRATE_NONE) then
-      write(message(1), '(a)') 'Integrate on: '//index2var(integrate)
-      call messages_info(1)      
-      filename = "PES_velocity.map.i_"//trim(index2var(integrate))//".p"//index2axis(dir)//"=0"
-    end if
-    
-    if (need_pmesh) then
-      call pes_mask_output_full_mapM_cut(pesk, filename, ll, dim, pol, dir, integrate, & 
-                                         pos = idxZero, pmesh = pmesh)  
-    else    
-      call pes_mask_output_full_mapM_cut(pesk, filename, ll, dim, pol, dir, integrate, &
-                                         pos = idxZero, Lk = Lk)    
-    end if
-
-  case(4) ! Angle energy resolved on plane 
-    write(message(1), '(a)') 'Save angle and energy-resolved PES'
-    call messages_info(1)
-    if(uEstep >  0 .and. uEstep > Estep) then
-      Estep = uEstep
-    else
-      Estep = Emax/size(Lk,1)
-    end if
-
-    call pes_mask_output_ar_plane_M(pesk,'./PES_energy.map', Lk, ll, dim, pol, Emax, Estep)
-
-  case(5) ! Angular-resolved  
-
-
-    write(message(1), '(a,es19.12,a2,es19.12,2x,a19)') &
-          'Save PES on a spherical cut at E= ',Emin,", ",Emax, & 
-           str_center('['//trim(units_abbrev(units_out%energy)) // ']', 19) 
-    call messages_info(1)
-
-    if(uEstep >  0 .and. uEstep > Estep) then
-     Estep = uEstep
-    else
-     Estep = Emax/size(Lk,1)
-    end if
- 
-    call pes_mask_output_ar_spherical_cut_M(pesk,'./PES_sphere.map', Lk, ll, dim, pol, Emin, Emax, Estep)
-
-  case(6) ! Full momentum resolved matrix 
-  
-    call io_function_read_how(sb, how, ignore_error = .true.)
- 
-    write(message(1), '(a)') 'Save full momentum-resolved PES'
-    call messages_info(1)
-
-    if (need_pmesh) then
-      how = io_function_fill_how("VTK")
-      call pes_mask_output_full_mapM(pesk, './PES_velocity_map', Lk, ll, how, sb, pmesh)
-    else
-      call pes_mask_output_full_mapM(pesk, './PES_velocity_map', Lk, ll, how, sb) 
-    end if
-
-    case(7) ! ARPES 
- 
-      write(message(1), '(a)') 'Save ARPES'
-      call messages_info(1)
-
-      forall (i1=1:ll(1), i2=1:ll(2), i3=1:ll(3))
-        pmesh(i1,i2,i3,sb%dim) = units_from_atomic(units_out%energy, &
-          sign(M_ONE,pmesh(i1,i2,i3,sb%dim)) * sum( pmesh(i1,i2,i3,1:sb%dim)**2 )/M_TWO)
-      end forall
-
-      how = io_function_fill_how("VTK")
-      
-      call pes_mask_output_full_mapM(pesk, './PES_ARPES', Lk, ll, how, sb, pmesh)   
-
-  end select
+  call output_pes()
 
 
   write(message(1), '(a)') 'Done'
@@ -414,6 +364,118 @@ program photoelectron_spectrum
   
   contains
     
+    subroutine output_pes()
+      
+      ! choose what to calculate
+      ! these functions are defined in pes_mask_out_inc.F90
+      
+      
+      if(iand(pesout%what, OPTION__PHOTOELECTRONSPECTRUMOUTPUT__ENERGY_TOT) /= 0) then
+        call messages_print_stress(stdout, "Energy-resolved PES")
+        call pes_mask_output_power_totalM(pesk,'./PES_power.sum', Lk, ll, dim, Emax, Estep, interpol)
+
+      end if
+      
+      if(iand(pesout%what, OPTION__PHOTOELECTRONSPECTRUMOUTPUT__ENERGY_ANGLE) /= 0) then
+        call messages_print_stress(stdout, "Angle- and energy-resolved PES")
+        call pes_mask_output_ar_polar_M(pesk,'./PES_angle_energy.map', Lk, ll, dim, pol, Emax, Estep)
+      end if
+
+      if(iand(pesout%what, OPTION__PHOTOELECTRONSPECTRUMOUTPUT__VELOCITY_MAP_CUT) /= 0) then
+        call messages_print_stress(stdout, "Velocity map on a plane")
+        dir = -1
+        if(sum((pvec-(/1 ,0 ,0/))**2)  <= M_EPSILON  )  dir = 1
+        if(sum((pvec-(/0 ,1 ,0/))**2)  <= M_EPSILON  )  dir = 2
+        if(sum((pvec-(/0 ,0 ,1/))**2)  <= M_EPSILON  )  dir = 3
+
+        if (have_zweight_path) then
+          filename = "PES_velocity_map.path"
+        else
+          filename = "PES_velocity_map.p"//index2axis(dir)//"=0"
+        end if
+
+        if (dir == -1) then
+            write(message(1), '(a)') 'Unrecognized plane. Use -u to change.'
+            call messages_fatal(1)
+          else
+            write(message(1), '(a)') 'Save velocity map on plane: '//index2axis(dir)//" = 0"
+            call messages_info(1)
+        end if
+
+        if(integrate /= INTEGRATE_NONE) then
+          write(message(1), '(a)') 'Integrate on: '//index2var(integrate)
+          call messages_info(1)
+          filename = "PES_velocity.map.i_"//trim(index2var(integrate))//".p"//index2axis(dir)//"=0"
+        end if
+
+        if (need_pmesh) then
+          call pes_mask_output_full_mapM_cut(pesk, filename, ll, dim, pol, dir, integrate, &
+                                             pos = idxZero, pmesh = pmesh)
+        else
+          call pes_mask_output_full_mapM_cut(pesk, filename, ll, dim, pol, dir, integrate, &
+                                             pos = idxZero, Lk = Lk)
+        end if
+      end if
+
+      if(iand(pesout%what, OPTION__PHOTOELECTRONSPECTRUMOUTPUT__ENERGY_XY) /= 0) then
+        call messages_print_stress(stdout, "Angle and energy-resolved on a plane")
+        if(uEstep >  0 .and. uEstep > Estep) then
+          Estep = uEstep
+        else
+          Estep = Emax/size(Lk,1)
+        end if
+
+        call pes_mask_output_ar_plane_M(pesk,'./PES_energy.map', Lk, ll, dim, pol, Emax, Estep)
+      end if
+
+      if(iand(pesout%what, OPTION__PHOTOELECTRONSPECTRUMOUTPUT__ENERGY_TH_PH) /= 0) then
+        call messages_print_stress(stdout, "PES on spherical cuts")
+
+        write(message(1), '(a,es19.12,a2,es19.12,2x,a19)') &
+              'Save PES on a spherical cut at E= ',Emin,", ",Emax, &
+               str_center('['//trim(units_abbrev(units_out%energy)) // ']', 19)
+        call messages_info(1)
+
+        if(uEstep >  0 .and. uEstep > Estep) then
+         Estep = uEstep
+        else
+         Estep = Emax/size(Lk,1)
+        end if
+
+        call pes_mask_output_ar_spherical_cut_M(pesk,'./PES_sphere.map', Lk, ll, dim, pol, Emin, Emax, Estep)
+      end if
+
+      if(iand(pesout%what, OPTION__PHOTOELECTRONSPECTRUMOUTPUT__VELOCITY_MAP) /= 0) then
+        
+        call io_function_read_how(sb, how, ignore_error = .true.)
+        call messages_print_stress(stdout, "Full velocity map")
+
+        if (need_pmesh) then
+          how = io_function_fill_how("VTK")
+          call pes_mask_output_full_mapM(pesk, './PES_velocity_map', Lk, ll, how, sb, pmesh)
+        else
+          call pes_mask_output_full_mapM(pesk, './PES_velocity_map', Lk, ll, how, sb)
+        end if
+        
+      end if
+
+      if(iand(pesout%what, OPTION__PHOTOELECTRONSPECTRUMOUTPUT__ARPES) /= 0) then
+        call messages_print_stress(stdout, "ARPES")
+
+        forall (i1=1:ll(1), i2=1:ll(2), i3=1:ll(3))
+          pmesh(i1,i2,i3,sb%dim) = units_from_atomic(units_out%energy, &
+            sign(M_ONE,pmesh(i1,i2,i3,sb%dim)) * sum( pmesh(i1,i2,i3,1:sb%dim)**2 )/M_TWO)
+        end forall
+
+        how = io_function_fill_how("VTK")
+
+        call pes_mask_output_full_mapM(pesk, './PES_ARPES', Lk, ll, how, sb, pmesh)
+      end if
+      
+      
+      
+    end subroutine output_pes
+    
     subroutine get_kpath_direction(kpoints, krng, kpth_dir, pvec)
       type(kpoints_t),   intent(in)  :: kpoints 
       integer,           intent(in)  :: krng(2)
@@ -431,6 +493,7 @@ program photoelectron_spectrum
       kpt(1:dim) = kpoints_get_point(kpoints, krng(1)+1)-kpoints_get_point(kpoints, krng(1))
       kpt(1:dim) = kpt(1:dim)/sqrt(sum(kpt(1:dim)**2))  
            
+      
       if (sum((kpt(:) - (/1,0,0/))**2) < M_EPSILON) then
         kpth_dir = 1
         write(message(1), '(a)') 'along kx'
