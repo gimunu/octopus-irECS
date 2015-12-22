@@ -129,7 +129,7 @@ contains
     type(curv_irecs_t), target, intent(in)  :: cv
     FLOAT,                     intent(in)  :: chi(:)  !< chi(sb%dim)
     FLOAT,                     intent(out) :: x(:)    !< x(sb%dim)
-    CMPLX,                     intent(out) :: phx(:)  !< the complex phase of x
+    CMPLX, optional,           intent(out) :: phx(:)  !< the complex phase of x
 
     integer :: i
     FLOAT :: r
@@ -140,11 +140,11 @@ contains
     
     if (r < cv%R0) then
       x(sb%dim) =  chi(sb%dim)
-      phx(sb%dim) = M_ONE 
+      if (present(phx)) phx(sb%dim) = M_ONE 
     else
       do i=1, sb%dim
         x(i)   = exp(cv%gamma * (chi(i) - cv%R0))
-        phx(i) = exp(M_ZI*cv%theta) 
+        if (present(phx)) phx(i) = exp(M_ZI*cv%theta) 
       end do
     end if
 
@@ -182,6 +182,9 @@ contains
 
     ! no push_sub, called too frequently
 
+    do i =1, sb%dim
+      J(i,i) = M_ONE/sb%dim 
+    end do
 
   end subroutine curv_irecs_jacobian
 

@@ -51,6 +51,14 @@ module derivatives_m
   use types_m
   use utils_m
   use varinfo_m
+  
+  ! for debug reasons 
+!   use io_binary_m
+!   use io_function_m
+!   use io_m
+!   use unit_m
+!   use unit_system_m
+
 
   implicit none
 
@@ -428,6 +436,8 @@ contains
     logical :: const_w_, cmplx_op_
     character(len=32) :: name
     type(nl_operator_t) :: auxop
+      
+    type(test_parameters_t) :: test_param
 
     PUSH_SUB(derivatives_build)
 
@@ -536,6 +546,14 @@ contains
       call nl_operator_copy(der%lapl, auxop)
       call nl_operator_end(auxop)
     end if
+    
+!     test_param%repetitions = 1
+!     test_param%min_blocksize = 1
+!     test_param%max_blocksize = 1
+!
+!     call dderivatives_test(der, test_param)
+!     call exit(1)
+    
 
     POP_SUB(derivatives_build)
 

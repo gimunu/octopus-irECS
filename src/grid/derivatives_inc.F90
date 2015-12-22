@@ -321,6 +321,8 @@ subroutine X(derivatives_test)(this, test_param)
   real(8) :: stime, etime
   character(len=20) :: type
 
+  integer :: ierr 
+
   call parse_variable('StatesPack', .true., packstates)
 
   SAFE_ALLOCATE(ff(1:this%mesh%np_part))
@@ -344,7 +346,8 @@ subroutine X(derivatives_test)(this, test_param)
   ! is constant at the borders, since we assume that all boundary
   ! points have equal values to optimize the application of the nl-operator.
 
-  aa = R_TOTYPE(1.0)/this%mesh%sb%lsize(1)
+!   aa = R_TOTYPE(1.0)/this%mesh%sb%lsize(1)
+  aa = R_TOTYPE(0.2)
   bb = R_TOTYPE(10.0)
   cc = R_TOTYPE(100.0)
 
@@ -358,6 +361,10 @@ subroutine X(derivatives_test)(this, test_param)
   blocksize = test_param%min_blocksize
     
   forall(ip = 1:this%mesh%np_part) ff(ip) = bb*exp(-aa*sum(this%mesh%x(ip, 1:this%mesh%sb%dim)**2)) + cc
+
+!   call dio_function_output(io_function_fill_how("AxisX"), &
+!                               ".", "wf",  this%mesh, real(ff, 8), unit_one, ierr)
+
 
   do 
 
@@ -390,12 +397,23 @@ subroutine X(derivatives_test)(this, test_param)
       call batch_unpack(ffb, copy = .false.)
       call batch_unpack(opffb)
     end if
+!     call dio_function_output(io_function_fill_how("AxisX"), &
+!                                 ".", "lapl_wf",  this%mesh, real(opffb%states_linear(blocksize)%X(psi), 8), unit_one, ierr)
+
 
     forall(ip = 1:this%mesh%np)
       opffb%states_linear(blocksize)%X(psi)(ip) = CNST(2.0)*opffb%states_linear(blocksize)%X(psi)(ip) - &
         (M_FOUR*aa**2*bb*sum(this%mesh%x(ip, :)**2)*exp(-aa*sum(this%mesh%x(ip, :)**2)) &
         - this%mesh%sb%dim*M_TWO*aa*bb*exp(-aa*sum(this%mesh%x(ip, :)**2)))
     end forall
+
+    forall(ip = 1:this%mesh%np_part) ff(ip) = (M_FOUR*aa**2*bb*sum(this%mesh%x(ip, :)**2)*exp(-aa*sum(this%mesh%x(ip, :)**2)) &
+        - this%mesh%sb%dim*M_TWO*aa*bb*exp(-aa*sum(this%mesh%x(ip, :)**2)))/M_TWO
+
+!     call dio_function_output(io_function_fill_how("AxisX"), &
+!                                 ".", "lapl_wf_ref",  this%mesh, real(ff, 8), unit_one, ierr)
+
+
 
     write(message(1), '(3a,i3,a,es17.10,a,f8.3)') &
       'Laplacian ', trim(type),  &
