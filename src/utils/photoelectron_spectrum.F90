@@ -341,30 +341,18 @@ program photoelectron_spectrum
     end forall
   end if
 
-  ! Read the data
-  call pes_mask_map_from_states(restart, st, lll, pesk, krng, Lp)
-
-
-
-
-  ! Write total quantities (summed over spin) 
-  ist = 0 
-  ispin = 0
-  if (st%d%ispin == UNPOLARIZED) then
-    pesk_out => pesk(:,:,:,1)
-    call output_pes()
-  else 
-    SAFE_ALLOCATE(pesk_out(1:ll(1),1:ll(2),1:ll(3)))
-    pesk_out(:,:,:) = pesk(:,:,:,1)+pesk(:,:,:,2)
-    
-    call output_pes()
-        
-    SAFE_DEALLOCATE_P(pesk_out)      
-    
-    do ispin = 1, st%d%nspin
-      pesk_out => pesk(:,:,:,ispin)
-      call output_pes()    
+  if (resolve_states) then
+    do ist = st_range(1), st_range(2)
+      call pes_mask_map_from_states(restart, st, lll, pesk, krng, Lp, ist)
+      call output_spin_pes()
     end do
+    
+  else
+    ! Read the data
+    ist = 0 
+    call pes_mask_map_from_states(restart, st, lll, pesk, krng, Lp)
+    call output_spin_pes()
+    
   end if
 
 
@@ -416,20 +404,41 @@ program photoelectron_spectrum
           
     end function outfile  
           
+    subroutine output_spin_pes()
+
+      ! Write total quantities (summed over spin) 
+      ispin = 0
+      if (st%d%ispin == UNPOLARIZED) then
+        pesk_out => pesk(:,:,:,1)
+        call output_pes()
+      else 
+        SAFE_ALLOCATE(pesk_out(1:ll(1),1:ll(2),1:ll(3)))
+        pesk_out(:,:,:) = pesk(:,:,:,1)+pesk(:,:,:,2)
+    
+        call output_pes()
+        
+        SAFE_DEALLOCATE_P(pesk_out)      
+    
+        do ispin = 1, st%d%nspin
+          pesk_out => pesk(:,:,:,ispin)
+          call output_pes()    
+        end do
+      end if      
+    end subroutine output_spin_pes
     
     subroutine output_pes()
       
       ! choose what to calculate
       ! these functions are defined in pes_mask_out_inc.F90
+
+      if (st%d%ispin /= UNPOLARIZED .or. ist>0) call messages_print_stress(stdout)
       
       if (ist > 0 ) then 
-        call messages_print_stress(stdout)
         write(message(1), '(a,i4)') 'State = ', ist
         call messages_info(1)
       end if
       
       if (st%d%ispin /= UNPOLARIZED) then
-        call messages_print_stress(stdout)
         if (ispin > 0 ) then 
           write(message(1), '(a,i1)') 'Spin component= ', ispin
           call messages_info(1)

@@ -272,25 +272,36 @@ end subroutine pes_mask_pmesh
 
 
 !< Build the photoemission map form the restart files
-subroutine pes_mask_map_from_states(restart, st, ll, pesK, krng, Lp)
+subroutine pes_mask_map_from_states(restart, st, ll, pesK, krng, Lp, istin)
   type(restart_t),    intent(in) :: restart
   type(states_t),     intent(in) :: st
   integer,            intent(in) :: ll(:)
   FLOAT, target,     intent(out) :: pesK(:,:,:,:)
   integer,           intent(in)  :: krng(:) 
   integer,  dimension(1:ll(1),1:ll(2),1:ll(3),krng(1):krng(2),1:3), intent(in) :: Lp
+  integer, optional, intent(in)  :: istin 
   
   integer :: ik, ist, idim, itot, nkpt, ispin
   integer :: i1, i2, i3, ip(1:3)
   integer :: idone, ntodo
   CMPLX   :: psiG1(1:ll(1),1:ll(2),1:ll(3)), psiG2(1:ll(1),1:ll(2),1:ll(3))
   FLOAT   :: weight 
+  integer :: istart, iend, nst
 
   PUSH_SUB(pes_mask_map_from_states)
 
+  istart = 1
+  iend = st%nst
+  nst = st%nst
+  if(present(istin)) then
+    istart = istin
+    iend = istin
+    nst = 1
+  end if
+
   nkpt =  krng(2)-krng(1)+1
 !       ntodo = st%d%kpt%nglobal * st%nst * st%d%dim
-  ntodo = nkpt * st%nst 
+  ntodo = nkpt * nst 
   idone = 0 
   call loct_progress_bar(-1, ntodo)
   
@@ -298,7 +309,7 @@ subroutine pes_mask_map_from_states(restart, st, ll, pesK, krng, Lp)
   do ik = krng(1), krng(2)
     ispin = states_dim_get_spin_index(st%d, ik)
     
-    do ist = 1, st%nst
+    do ist = istart, iend
 
       if (st%d%kweights(ik) < M_EPSILON) then
         ! we have a zero-weight path
