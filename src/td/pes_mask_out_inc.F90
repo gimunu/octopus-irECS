@@ -276,54 +276,89 @@ subroutine pes_mask_map_from_states(restart, st, ll, pesK, krng, Lp)
   type(restart_t),    intent(in) :: restart
   type(states_t),     intent(in) :: st
   integer,            intent(in) :: ll(:)
-  FLOAT, target,     intent(out) :: pesK(:,:,:)
+  FLOAT, target,     intent(out) :: pesK(:,:,:,:)
   integer,           intent(in)  :: krng(:) 
   integer,  dimension(1:ll(1),1:ll(2),1:ll(3),krng(1):krng(2),1:3), intent(in) :: Lp
   
-  integer :: ik, ist, idim, itot, nkpt
+  integer :: ik, ist, idim, itot, nkpt, ispin
   integer :: i1, i2, i3, ip(1:3)
   integer :: idone, ntodo
-  CMPLX   :: psiG(1:ll(1),1:ll(2),1:ll(3))
+  CMPLX   :: psiG1(1:ll(1),1:ll(2),1:ll(3)), psiG2(1:ll(1),1:ll(2),1:ll(3))
   FLOAT   :: weight 
 
   PUSH_SUB(pes_mask_map_from_states)
 
   nkpt =  krng(2)-krng(1)+1
 !       ntodo = st%d%kpt%nglobal * st%nst * st%d%dim
-  ntodo = nkpt * st%nst * st%d%dim
+  ntodo = nkpt * st%nst 
   idone = 0 
   call loct_progress_bar(-1, ntodo)
   
   pesK = M_ZERO
   do ik = krng(1), krng(2)
+    ispin = states_dim_get_spin_index(st%d, ik)
+    
     do ist = 1, st%nst
-      do idim = 1, st%d%dim
-        itot = ist + (ik-1) * st%nst +  (idim-1) * st%nst * st%d%kpt%nglobal
-        call pes_mask_map_from_state(restart, itot, ll, psiG)
+
+      if (st%d%kweights(ik) < M_EPSILON) then
+        ! we have a zero-weight path
+        weight = st%occ(ist, ik)
+      else
+        weight = st%occ(ist, ik) * st%d%kweights(ik)
+      end if
+      
+      if(st%d%ispin /= SPINORS) then 
+
+        do idim = 1, st%d%dim
+          itot = ist + (ik-1) * st%nst +  (idim-1) * st%nst * st%d%kpt%nglobal
+          call pes_mask_map_from_state(restart, itot, ll, psiG1)
         
+          do i1=1, ll(1)
+            do i2=1, ll(2)
+              do i3=1, ll(3)
+                ip(1:3) = Lp(i1, i2, i3, ik, 1:3) 
+              
+                  pesK(ip(1),ip(2),ip(3), ispin) = pesK(ip(1),ip(2),ip(3), ispin) &
+                                                 + abs(psiG1(i1,i2,i3))**2 * weight 
+                
+              end do
+            end do
+          end do
+                
+        end do
+      else ! SPINORS
+        idim = 1
+        itot = ist + (ik-1) * st%nst +  (idim-1) * st%nst * st%d%kpt%nglobal
+        call pes_mask_map_from_state(restart, itot, ll, psiG1)
+        idim = 2
+        itot = ist + (ik-1) * st%nst +  (idim-1) * st%nst * st%d%kpt%nglobal
+        call pes_mask_map_from_state(restart, itot, ll, psiG2)
+            
         do i1=1, ll(1)
           do i2=1, ll(2)
             do i3=1, ll(3)
               ip(1:3) = Lp(i1, i2, i3, ik, 1:3) 
-              
-              if (st%d%kweights(ik) < M_EPSILON) then
-                ! we have a zero-weight path
-                weight = st%occ(ist, ik)
-              else
-                weight = st%occ(ist, ik) * st%d%kweights(ik)
-              end if
-              
-              pesK(ip(1),ip(2),ip(3)) = pesK(ip(1),ip(2),ip(3)) &
-                + abs(psiG(i1,i2,i3))**2 * weight 
-                                      
+            
+                pesK(ip(1),ip(2),ip(3), 1) = pesK(ip(1),ip(2),ip(3), 1) &
+                                               + abs(psiG1(i1,i2,i3))**2 * weight 
+
+                pesK(ip(1),ip(2),ip(3), 2) = pesK(ip(1),ip(2),ip(3), 2) &
+                                               + abs(psiG2(i1,i2,i3))**2 * weight                                
+
+                pesK(ip(1),ip(2),ip(3), 3) = pesK(ip(1),ip(2),ip(3), 3) &
+                                               + real(psiG1(i1,i2,i3)*conjg(psiG2(i1,i2,i3)), REAL_PRECISION) * weight                                
+                pesK(ip(1),ip(2),ip(3), 3) = pesK(ip(1),ip(2),ip(3), 3) &
+                                               + aimag(psiG1(i1,i2,i3)*conjg(psiG2(i1,i2,i3))) * weight                         
             end do
           end do
         end do
-        
-        idone = idone +1 
-        call loct_progress_bar(idone, ntodo)
-        
-      end do
+          
+          
+      end if
+      
+      idone = idone +1 
+      call loct_progress_bar(idone, ntodo)
+      
     end do
   end do
 

@@ -40,6 +40,7 @@ program photoelectron_spectrum
   use space_m
   use string_m
   use states_m
+  use states_dim_m
   use unit_m
   use unit_system_m
   use utils_m
@@ -60,7 +61,7 @@ program photoelectron_spectrum
   FLOAT                :: uThstep, uThspan(2), uPhstep, uPhspan(2), pvec(3)
   FLOAT                :: center(3)
   FLOAT, pointer       :: Lk(:,:), RR(:)
-  FLOAT, allocatable   :: pesk(:,:,:), pmesh(:,:,:,:)
+  FLOAT, allocatable   :: pmesh(:,:,:,:)
   integer, allocatable :: Lp(:,:,:,:,:)
   logical              :: interpol, need_pmesh, resolve_states
   integer              :: ii, i1,i2,i3, idxZero(1:3), st_range(2)
@@ -79,6 +80,11 @@ program photoelectron_spectrum
   integer              :: krng(2), nkpt, kpth_dir !< Kpoint range for zero-weight path
 
   type(pesoutput_t)    :: pesout
+    
+  integer              :: ist, ispin  
+  FLOAT, pointer       :: pesk_out(:,:,:) 
+  FLOAT, allocatable, target :: pesk(:,:,:,:)
+  
 
 
   call getopt_init(ierr)
@@ -250,11 +256,10 @@ program photoelectron_spectrum
   endif  
 
   SAFE_ALLOCATE(pmesh(1:ll(1),1:ll(2),1:ll(3),1:3 + 1))
-  SAFE_ALLOCATE(pesk(1:ll(1),1:ll(2),1:ll(3)))
+  SAFE_ALLOCATE(pesk(1:ll(1),1:ll(2),1:ll(3),1:st%d%nspin))
 
   call pes_mask_pmesh(sb%dim, sb%kpoints, lll, Lk, pmesh, idxZero, krng, Lp)  
    
-  call pes_mask_map_from_states(restart, st, lll, pesk, krng, Lp)
 
   
   if (.not. simul_box_is_periodic(sb) .or. kpoints_number(sb%kpoints) == 1) then
@@ -302,9 +307,10 @@ program photoelectron_spectrum
   !%End
   call parse_variable('PhotoelectronSpectrumOutput', pesout%what, pesout%what)
   
+  ! TODO: I think it would be better to move these options in the
+  ! input file to have more flexibility to combine and to keep
+  ! track of them. UDG
   ! Read options from command line
-  ! TODO: many options should be moved into octopus format in order to 
-  ! have more flexibility to combine them 
   call getopt_photoelectron_spectrum(interp,uEstep, uEspan,&
                                      uThstep, uThspan, uPhstep, &
                                      uPhspan, pol, center, pvec, integrate)
@@ -329,15 +335,38 @@ program photoelectron_spectrum
 
 
   ! Convert the grid units
-  if (need_pmesh) then
-    
+  if (need_pmesh) then    
     forall (i1=1:ll(1), i2=1:ll(2), i3=1:ll(3), ii = 1:3)
       pmesh(i1,i2,i3,ii) = units_from_atomic(sqrt(units_out%energy), pmesh(i1,i2,i3,ii))
     end forall
   end if
 
+  ! Read the data
+  call pes_mask_map_from_states(restart, st, lll, pesk, krng, Lp)
 
-  call output_pes()
+
+
+
+  ! Write total quantities (summed over spin) 
+  ist = 0 
+  ispin = 0
+  if (st%d%ispin == UNPOLARIZED) then
+    pesk_out => pesk(:,:,:,1)
+    call output_pes()
+  else 
+    SAFE_ALLOCATE(pesk_out(1:ll(1),1:ll(2),1:ll(3)))
+    pesk_out(:,:,:) = pesk(:,:,:,1)+pesk(:,:,:,2)
+    
+    call output_pes()
+        
+    SAFE_DEALLOCATE_P(pesk_out)      
+    
+    do ispin = 1, st%d%nspin
+      pesk_out => pesk(:,:,:,ispin)
+      call output_pes()    
+    end do
+  end if
+
 
 
   write(message(1), '(a)') 'Done'
@@ -364,21 +393,61 @@ program photoelectron_spectrum
   
   contains
     
+    function outfile(name, ist, ispin, extension) result(fname)    
+      character(len=*),   intent(in)   :: name
+      integer,            intent(in)   :: ist
+      integer,            intent(in)   :: ispin
+      character(len=*), optional, intent(in)    :: extension
+      character(len=512)               :: fname
+            
+      if (ist == 0) then 
+        fname = trim(name) 
+      else
+        write(fname, '(a,a,i4.4)') trim(name), '-st', ist
+      end if 
+
+      if (ispin >0)  then
+        write(fname, '(a,a,i1)') trim(fname),'-sp', ispin
+      end if 
+      
+      if (present(extension) .and. len(extension)>0) then
+        fname = trim(fname)//'.'//trim(extension)
+      end if
+          
+    end function outfile  
+          
+    
     subroutine output_pes()
       
       ! choose what to calculate
       ! these functions are defined in pes_mask_out_inc.F90
       
+      if (ist > 0 ) then 
+        call messages_print_stress(stdout)
+        write(message(1), '(a,i4)') 'State = ', ist
+        call messages_info(1)
+      end if
+      
+      if (st%d%ispin /= UNPOLARIZED) then
+        call messages_print_stress(stdout)
+        if (ispin > 0 ) then 
+          write(message(1), '(a,i1)') 'Spin component= ', ispin
+          call messages_info(1)
+        else 
+          write(message(1), '(a)') 'Spinless'
+          call messages_info(1)
+        end if
+      end if
       
       if(iand(pesout%what, OPTION__PHOTOELECTRONSPECTRUMOUTPUT__ENERGY_TOT) /= 0) then
         call messages_print_stress(stdout, "Energy-resolved PES")
-        call pes_mask_output_power_totalM(pesk,'./PES_power.sum', Lk, ll, dim, Emax, Estep, interpol)
+        call pes_mask_output_power_totalM(pesk_out,outfile('./PES_power',ist, ispin, 'sum'), Lk, ll, dim, Emax, Estep, interpol)
 
       end if
       
       if(iand(pesout%what, OPTION__PHOTOELECTRONSPECTRUMOUTPUT__ENERGY_ANGLE) /= 0) then
         call messages_print_stress(stdout, "Angle- and energy-resolved PES")
-        call pes_mask_output_ar_polar_M(pesk,'./PES_angle_energy.map', Lk, ll, dim, pol, Emax, Estep)
+        call pes_mask_output_ar_polar_M(pesk_out,outfile('./PES_angle_energy',ist, ispin, 'map'), Lk, ll, dim, pol, Emax, Estep)
       end if
 
       if(iand(pesout%what, OPTION__PHOTOELECTRONSPECTRUMOUTPUT__VELOCITY_MAP_CUT) /= 0) then
@@ -389,9 +458,10 @@ program photoelectron_spectrum
         if(sum((pvec-(/0 ,0 ,1/))**2)  <= M_EPSILON  )  dir = 3
 
         if (have_zweight_path) then
-          filename = "PES_velocity_map.path"
+          filename = outfile('PES_velocity_map',ist,ispin,'path')
         else
-          filename = "PES_velocity_map.p"//index2axis(dir)//"=0"
+!           filename = "PES_velocity_map.p"//index2axis(dir)//"=0"
+          filename = outfile('PES_velocity_map',ist,ispin,'p'//index2axis(dir)//'=0')
         end if
 
         if (dir == -1) then
@@ -405,14 +475,15 @@ program photoelectron_spectrum
         if(integrate /= INTEGRATE_NONE) then
           write(message(1), '(a)') 'Integrate on: '//index2var(integrate)
           call messages_info(1)
-          filename = "PES_velocity.map.i_"//trim(index2var(integrate))//".p"//index2axis(dir)//"=0"
+          filename = trim(filename)//'.i_'//trim(index2var(integrate))
+!           filename = "PES_velocity.map.i_"//".p"//index2axis(dir)//"=0"
         end if
 
         if (need_pmesh) then
-          call pes_mask_output_full_mapM_cut(pesk, filename, ll, dim, pol, dir, integrate, &
+          call pes_mask_output_full_mapM_cut(pesk_out, filename, ll, dim, pol, dir, integrate, &
                                              pos = idxZero, pmesh = pmesh)
         else
-          call pes_mask_output_full_mapM_cut(pesk, filename, ll, dim, pol, dir, integrate, &
+          call pes_mask_output_full_mapM_cut(pesk_out, filename, ll, dim, pol, dir, integrate, &
                                              pos = idxZero, Lk = Lk)
         end if
       end if
@@ -425,7 +496,7 @@ program photoelectron_spectrum
           Estep = Emax/size(Lk,1)
         end if
 
-        call pes_mask_output_ar_plane_M(pesk,'./PES_energy.map', Lk, ll, dim, pol, Emax, Estep)
+        call pes_mask_output_ar_plane_M(pesk_out,outfile('./PES_energy',ist,ispin,'map'), Lk, ll, dim, pol, Emax, Estep)
       end if
 
       if(iand(pesout%what, OPTION__PHOTOELECTRONSPECTRUMOUTPUT__ENERGY_TH_PH) /= 0) then
@@ -442,19 +513,21 @@ program photoelectron_spectrum
          Estep = Emax/size(Lk,1)
         end if
 
-        call pes_mask_output_ar_spherical_cut_M(pesk,'./PES_sphere.map', Lk, ll, dim, pol, Emin, Emax, Estep)
+        call pes_mask_output_ar_spherical_cut_M(pesk_out,outfile('./PES_sphere',ist,ispin,'map'), Lk, ll, dim, pol, Emin, Emax, Estep)
       end if
 
       if(iand(pesout%what, OPTION__PHOTOELECTRONSPECTRUMOUTPUT__VELOCITY_MAP) /= 0) then
         
         call io_function_read_how(sb, how, ignore_error = .true.)
         call messages_print_stress(stdout, "Full velocity map")
-
+        
+        filename = outfile('./PES_velocity_map', ist, ispin)
         if (need_pmesh) then
+          !force vtk output
           how = io_function_fill_how("VTK")
-          call pes_mask_output_full_mapM(pesk, './PES_velocity_map', Lk, ll, how, sb, pmesh)
+          call pes_mask_output_full_mapM(pesk_out, filename, Lk, ll, how, sb, pmesh)
         else
-          call pes_mask_output_full_mapM(pesk, './PES_velocity_map', Lk, ll, how, sb)
+          call pes_mask_output_full_mapM(pesk_out, filename, Lk, ll, how, sb)
         end if
         
       end if
@@ -469,7 +542,7 @@ program photoelectron_spectrum
 
         how = io_function_fill_how("VTK")
 
-        call pes_mask_output_full_mapM(pesk, './PES_ARPES', Lk, ll, how, sb, pmesh)
+        call pes_mask_output_full_mapM(pesk_out, outfile('./PES_ARPES', ist, ispin), Lk, ll, how, sb, pmesh)
       end if
       
       
