@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: photoelectron_spectrum.F90 14799 2015-11-20 08:09:32Z umberto $
+!! $Id: photoelectron_spectrum.F90 15009 2016-01-08 09:32:49Z umberto $
 
 #include "global.h"
 
@@ -450,13 +450,15 @@ program photoelectron_spectrum
       
       if(iand(pesout%what, OPTION__PHOTOELECTRONSPECTRUMOUTPUT__ENERGY_TOT) /= 0) then
         call messages_print_stress(stdout, "Energy-resolved PES")
-        call pes_mask_output_power_totalM(pesk_out,outfile('./PES_power',ist, ispin, 'sum'), Lk, ll, dim, Emax, Estep, interpol)
+        call pes_mask_output_power_totalM(pesk_out,outfile('./PES_power',ist, ispin, 'sum'), &
+                                          Lk, ll, dim, Emax, Estep, interpol)
 
       end if
       
       if(iand(pesout%what, OPTION__PHOTOELECTRONSPECTRUMOUTPUT__ENERGY_ANGLE) /= 0) then
         call messages_print_stress(stdout, "Angle- and energy-resolved PES")
-        call pes_mask_output_ar_polar_M(pesk_out,outfile('./PES_angle_energy',ist, ispin, 'map'), Lk, ll, dim, pol, Emax, Estep)
+        call pes_mask_output_ar_polar_M(pesk_out,outfile('./PES_angle_energy',ist, ispin, 'map'), &
+                                        Lk, ll, dim, pol, Emax, Estep)
       end if
 
       if(iand(pesout%what, OPTION__PHOTOELECTRONSPECTRUMOUTPUT__VELOCITY_MAP_CUT) /= 0) then
@@ -505,7 +507,8 @@ program photoelectron_spectrum
           Estep = Emax/size(Lk,1)
         end if
 
-        call pes_mask_output_ar_plane_M(pesk_out,outfile('./PES_energy',ist,ispin,'map'), Lk, ll, dim, pol, Emax, Estep)
+        call pes_mask_output_ar_plane_M(pesk_out,outfile('./PES_energy',ist,ispin,'map'), &
+                                        Lk, ll, dim, pol, Emax, Estep)
       end if
 
       if(iand(pesout%what, OPTION__PHOTOELECTRONSPECTRUMOUTPUT__ENERGY_TH_PH) /= 0) then
@@ -522,7 +525,8 @@ program photoelectron_spectrum
          Estep = Emax/size(Lk,1)
         end if
 
-        call pes_mask_output_ar_spherical_cut_M(pesk_out,outfile('./PES_sphere',ist,ispin,'map'), Lk, ll, dim, pol, Emin, Emax, Estep)
+        call pes_mask_output_ar_spherical_cut_M(pesk_out,outfile('./PES_sphere',ist,ispin,'map'), & 
+                                                Lk, ll, dim, pol, Emin, Emax, Estep)
       end if
 
       if(iand(pesout%what, OPTION__PHOTOELECTRONSPECTRUMOUTPUT__VELOCITY_MAP) /= 0) then
@@ -551,7 +555,8 @@ program photoelectron_spectrum
 
         how = io_function_fill_how("VTK")
 
-        call pes_mask_output_full_mapM(pesk_out, outfile('./PES_ARPES', ist, ispin), Lk, ll, how, sb, pmesh)
+        call pes_mask_output_full_mapM(pesk_out, outfile('./PES_ARPES', ist, ispin), &
+                                       Lk, ll, how, sb, pmesh)
       end if
       
       

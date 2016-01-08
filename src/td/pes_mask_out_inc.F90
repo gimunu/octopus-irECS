@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: pes_mask_out_inc.F90 14976 2016-01-05 14:27:54Z xavier $
+!! $Id: pes_mask_out_inc.F90 15009 2016-01-08 09:32:49Z umberto $
 
 
 
@@ -258,7 +258,8 @@ subroutine pes_mask_pmesh(dim, kpoints, ll, LG, pmesh, idxZero, krng, Lp)
     call messages_fatal(1)
   end if 
   
-
+ 
+ 
 
   SAFE_DEALLOCATE_A(Lkpt)
   SAFE_DEALLOCATE_A(idx)
@@ -354,12 +355,13 @@ subroutine pes_mask_map_from_states(restart, st, ll, pesK, krng, Lp, istin)
                                                + abs(psiG1(i1,i2,i3))**2 * weight 
 
                 pesK(ip(1),ip(2),ip(3), 2) = pesK(ip(1),ip(2),ip(3), 2) &
-                                               + abs(psiG2(i1,i2,i3))**2 * weight                                
+                                               + abs(psiG2(i1,i2,i3))**2 * weight
 
                 pesK(ip(1),ip(2),ip(3), 3) = pesK(ip(1),ip(2),ip(3), 3) &
-                                               + real(psiG1(i1,i2,i3)*conjg(psiG2(i1,i2,i3)), REAL_PRECISION) * weight                                
+                                               + real(psiG1(i1,i2,i3)*conjg(psiG2(i1,i2,i3)), REAL_PRECISION) * weight
+                                               
                 pesK(ip(1),ip(2),ip(3), 3) = pesK(ip(1),ip(2),ip(3), 3) &
-                                               + aimag(psiG1(i1,i2,i3)*conjg(psiG2(i1,i2,i3))) * weight                         
+                                               + aimag(psiG1(i1,i2,i3)*conjg(psiG2(i1,i2,i3))) * weight
             end do
           end do
         end do

@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: mesh_cube_map.F90 12862 2015-02-06 17:48:44Z xavier $
+!! $Id: mesh_cube_map.F90 15007 2016-01-08 00:09:38Z xavier $
 
 #include "global.h"
 
@@ -111,12 +111,16 @@ contains
 
     PUSH_SUB(mesh_cube_map_end)
 
-    SAFE_DEALLOCATE_P(this%map)
+    if(associated(this%map)) then
 
-    if(opencl_is_enabled()) then
+      SAFE_DEALLOCATE_P(this%map)
+      
+      if(opencl_is_enabled()) then
 #ifdef HAVE_OPENCL
-      call opencl_release_buffer(this%map_buffer)
+        call opencl_release_buffer(this%map_buffer)
 #endif
+      end if
+
     end if
 
     POP_SUB(mesh_cube_map_end)

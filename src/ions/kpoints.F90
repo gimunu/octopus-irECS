@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: kpoints.F90 14805 2015-11-21 03:04:08Z xavier $
+!! $Id: kpoints.F90 15009 2016-01-08 09:32:49Z umberto $
 
 #include "global.h"
   
@@ -1012,8 +1012,10 @@ contains
       kpoints_kweight_denominator = this%full%npoints
     else
       kpoints_kweight_denominator = 0
+      ! NB largest reasonable value is: # k-points x 48. from space-group symmetries
       do denom = 1, 100000
-        if(all(abs(int(this%full%weight(1:nik-nik_skip)*denom)-this%full%weight(1:nik-nik_skip)*denom) < CNST(10)*M_EPSILON)) then
+        if(all(abs(int(this%full%weight(1:nik-nik_skip)*denom + CNST(10)*M_EPSILON) - &
+          this%full%weight(1:nik-nik_skip)*denom) < CNST(100)*M_EPSILON)) then
           kpoints_kweight_denominator = denom
           exit
         end if

@@ -16,7 +16,7 @@
 	Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 	02110-1301, USA.
 
-	$Id: getopt_f.c 14384 2015-06-25 21:55:27Z umberto $
+	$Id: getopt_f.c 15009 2016-01-08 09:32:49Z umberto $
 */
 
 #include <config.h>

@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: basins.F90 14221 2015-06-05 16:37:56Z xavier $
+!! $Id: basins.F90 15005 2016-01-07 23:26:24Z xavier $
 
 #include "global.h"
 
@@ -188,7 +188,7 @@ contains
             index = index_from_coords(mesh%idx, point2)
             !From global to local
 #ifdef HAVE_MPI
-            index = vec_global2local(mesh%vp, index, mesh%vp%partno)
+            if(mesh%parallel_in_domains) index = vec_global2local(mesh%vp, index, mesh%vp%partno)
 #endif
             if(index <= 0 .or. index > mesh%np) cycle
             if(this%map(index) == -2) cycle
