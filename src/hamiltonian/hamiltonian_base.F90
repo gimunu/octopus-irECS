@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: hamiltonian_base.F90 14633 2015-10-04 05:40:47Z xavier $
+!! $Id: hamiltonian_base.F90 14976 2016-01-05 14:27:54Z xavier $
 
 #include "global.h"
 
@@ -209,11 +209,11 @@ contains
 
   ! ---------------------------------------------------------------
   !> This function ensures that the corresponding field is allocated.
-  subroutine hamiltonian_base_allocate(this, mesh, field, cmplxscl)
+  subroutine hamiltonian_base_allocate(this, mesh, field, complex_potential)
     type(hamiltonian_base_t), intent(inout) :: this
     type(mesh_t),             intent(in)    :: mesh
     integer,                  intent(in)    :: field
-    logical,                  intent(in)    :: cmplxscl
+    logical,                  intent(in)    :: complex_potential
 
     PUSH_SUB(hamiltonian_base_allocate)
 
@@ -221,7 +221,7 @@ contains
       if(.not. allocated(this%potential)) then
         SAFE_ALLOCATE(this%potential(1:mesh%np, 1:this%nspin))
         this%potential = M_ZERO
-        if(cmplxscl) then
+        if(complex_potential) then
           SAFE_ALLOCATE(this%Impotential(1:mesh%np, 1:this%nspin))
           this%Impotential = M_ZERO
         end if
@@ -418,7 +418,7 @@ contains
     SAFE_DEALLOCATE_A(atom_counted)
     SAFE_DEALLOCATE_A(region_count)
 
-    if(in_debug_mode) then
+    if(debug%info) then
       call messages_write('The atoms can be separated in ')
       call messages_write(nregion)
       call messages_write(' non-overlapping groups.')

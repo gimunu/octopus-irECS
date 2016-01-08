@@ -10,6 +10,8 @@ module base_config_m
   use kinds_m
   use messages_m
   use profiling_m
+  use simulation_m
+  use storage_m
 
   implicit none
 
@@ -22,35 +24,6 @@ module base_config_m
   integer, parameter :: default_nspin = 1
 
 contains
-
-  ! ---------------------------------------------------------
-  subroutine base_config_parse_grid(this)
-    type(json_object_t), intent(out) :: this
-
-    PUSH_SUB(base_config_parse_grid)
-
-    call json_init(this)
-
-    POP_SUB(base_config_parse_grid)
-  end subroutine base_config_parse_grid
-
-  ! ---------------------------------------------------------
-  subroutine base_config_parse_simulation(this)
-    type(json_object_t), intent(out) :: this
-
-    type(json_object_t), pointer :: cnfg
-
-    PUSH_SUB(base_config_parse_simulation)
-
-    nullify(cnfg)
-    call json_init(this)
-    SAFE_ALLOCATE(cnfg)
-    call base_config_parse_grid(cnfg)
-    call json_set(this, "grid", cnfg)
-    nullify(cnfg)
-
-    POP_SUB(base_config_parse_simulation)
-  end subroutine base_config_parse_simulation
 
   ! ---------------------------------------------------------
   subroutine base_config_parse_space(this, ndim)
@@ -104,11 +77,13 @@ contains
     type(json_object_t), intent(out) :: this
     integer,   optional, intent(in)  :: nspin
 
+    type(json_object_t),             pointer :: cnfg
     real(kind=wp), dimension(:), allocatable :: chrg
     integer                                  :: ispin
 
     PUSH_SUB(base_config_parse_density)
 
+    nullify(cnfg)
     ispin = default_nspin
     if(present(nspin)) ispin = nspin
     ASSERT(ispin>0)
@@ -118,6 +93,10 @@ contains
     call json_set(this, "nspin", ispin)
     call json_set(this, "charge", chrg)
     SAFE_DEALLOCATE_A(chrg)
+    SAFE_ALLOCATE(cnfg)
+    call storage_init(cnfg, ndim=ispin, fine=.true.)
+    call json_set(this, "storage", cnfg)
+    nullify(cnfg)
 
     POP_SUB(base_config_parse_density)
   end subroutine base_config_parse_density
@@ -143,10 +122,10 @@ contains
   end subroutine base_config_parse_states
 
   ! ---------------------------------------------------------
-  subroutine base_config_parse_system(this, ndim, nspin)
+  subroutine base_config_parse_system(this, nspin, ndim)
     type(json_object_t), intent(out) :: this
-    integer,   optional, intent(in)  :: ndim
     integer,   optional, intent(in)  :: nspin
+    integer,   optional, intent(in)  :: ndim
 
     type(json_object_t), pointer :: cnfg
 
@@ -174,19 +153,26 @@ contains
   subroutine base_config_parse_hamiltonian(this)
     type(json_object_t), intent(out) :: this
 
+    type(json_object_t), pointer :: cnfg
+
     PUSH_SUB(base_config_parse_hamiltonian)
 
+    nullify(cnfg)
     call json_init(this)
     call json_set(this, "type", HMLT_TYPE_HMLT)
+    SAFE_ALLOCATE(cnfg)
+    call storage_init(cnfg, full=.false., allocate=.false.)
+    call json_set(this, "storage", cnfg)
+    nullify(cnfg)
 
     POP_SUB(base_config_parse_hamiltonian)
   end subroutine base_config_parse_hamiltonian
 
   ! ---------------------------------------------------------
-  subroutine base_config_parse_model(this, ndim, nspin)
+  subroutine base_config_parse_model(this, nspin, ndim)
     type(json_object_t), intent(out) :: this
-    integer,   optional, intent(in)  :: ndim
     integer,   optional, intent(in)  :: nspin
+    integer,   optional, intent(in)  :: ndim
 
     type(json_object_t), pointer :: cnfg
 
@@ -195,11 +181,7 @@ contains
     nullify(cnfg)
     call json_init(this)
     SAFE_ALLOCATE(cnfg)
-    call base_config_parse_simulation(cnfg)
-    call json_set(this, "simulation", cnfg)
-    nullify(cnfg)
-    SAFE_ALLOCATE(cnfg)
-    call base_config_parse_system(cnfg, ndim, nspin)
+    call base_config_parse_system(cnfg, nspin, ndim)
     call json_set(this, "system", cnfg)
     nullify(cnfg)
     SAFE_ALLOCATE(cnfg)
@@ -211,10 +193,10 @@ contains
   end subroutine base_config_parse_model
 
   ! ---------------------------------------------------------
-  subroutine base_config_parse(this, ndim, nspin)
+  subroutine base_config_parse(this, nspin, ndim)
     type(json_object_t), intent(out) :: this
-    integer,   optional, intent(in)  :: ndim
     integer,   optional, intent(in)  :: nspin
+    integer,   optional, intent(in)  :: ndim
 
     type(json_object_t), pointer :: cnfg
     type(json_array_t),  pointer :: list
@@ -227,7 +209,11 @@ contains
     call json_set(this, "name", "base")
     call json_set(this, "interpolation", NEAREST)
     SAFE_ALLOCATE(cnfg)
-    call base_config_parse_model(cnfg, ndim, nspin)
+    call simulation_init(cnfg)
+    call json_set(this, "simulation", cnfg)
+    nullify(cnfg)
+    SAFE_ALLOCATE(cnfg)
+    call base_config_parse_model(cnfg, nspin, ndim)
     call json_set(this, "model", cnfg)
     nullify(cnfg)
     SAFE_ALLOCATE(list)

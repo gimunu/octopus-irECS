@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: mesh_partition.F90 14839 2015-11-28 19:17:42Z xavier $
+!! $Id: mesh_partition.F90 14976 2016-01-05 14:27:54Z xavier $
 
 #include "global.h"
 
@@ -246,7 +246,7 @@ contains
     xadj(nv+1) = ne + 1
 
 
-    if (in_debug_mode .or. library == METIS) then
+    if (debug%info .or. library == METIS) then
       !Gather the global xadj and adjncy arrays
       SAFE_ALLOCATE(rcounts(1:npart))
       SAFE_ALLOCATE(rdispls(1:npart))
@@ -283,7 +283,7 @@ contains
     end if
 
 
-    if(in_debug_mode) then
+    if(debug%info) then
       ! DEBUG output. Write graph to file mesh_graph.txt.
       message(1) = 'Info: Adjacency lists of the graph representing the grid'
       message(2) = 'Info: are stored in debug/mesh_partition/mesh_graph.txt.'
@@ -393,7 +393,7 @@ contains
     ASSERT(all(part(1:nv) <= vsize))
     call partition_set(mesh%inner_partition, part)
 
-    if (in_debug_mode .or. library == METIS) then
+    if (debug%info .or. library == METIS) then
       SAFE_DEALLOCATE_A(xadj_global)
       SAFE_DEALLOCATE_A(adjncy_global)
     end if
@@ -659,7 +659,7 @@ contains
     integer, allocatable :: jpcoords(:, :), jp(:)
     integer :: istencil, ipart, jpart
     type(profile_t), save :: prof
-    logical, allocatable :: is_a_neigh(:, :), gotit(:)
+    logical, allocatable :: is_a_neigh(:), gotit(:)
     FLOAT :: scal
 
     PUSH_SUB(mesh_partition_write_info)
@@ -674,7 +674,7 @@ contains
     SAFE_ALLOCATE(nbound(1:npart))
     SAFE_ALLOCATE(nlocal(1:npart))
     SAFE_ALLOCATE(nneigh(1:npart))
-    SAFE_ALLOCATE(is_a_neigh(1:npart, 1:npart))
+    SAFE_ALLOCATE(is_a_neigh(1:npart))
     SAFE_ALLOCATE(gotit(1:mesh%np_part_global))
     SAFE_ALLOCATE(jpcoords(1:MAX_DIM, 1:stencil%size))
     SAFE_ALLOCATE(jp(1:stencil%size))
@@ -685,49 +685,54 @@ contains
     nlocal = 0
     nneigh = 0
 
-    do ipart = 1, npart
-      gotit = .false.
-      do ip = 1, mesh%np_global
-        if(ipart /= point_to_part(ip)) cycle
+    ipart = mesh%mpi_grp%rank + 1
 
-        INCR(nlocal(ipart), 1)
-        call index_to_coords(mesh%idx, ip, ipcoords)
+    gotit = .false.
+    do ip = 1, mesh%np_global
+      if(ipart /= point_to_part(ip)) cycle
+      
+      INCR(nlocal(ipart), 1)
+      call index_to_coords(mesh%idx, ip, ipcoords)
+      
+      do istencil = 1, stencil%size
+        jpcoords(:, istencil) = ipcoords + stencil%points(:, istencil)
+      end do
+      
+      call index_from_coords_vec(mesh%idx, stencil%size, jpcoords, jp)
+      
+      do istencil = 1, stencil%size
+        if(stencil%center == istencil) cycle
         
-        do istencil = 1, stencil%size
-          jpcoords(:, istencil) = ipcoords + stencil%points(:, istencil)
-        end do
-        
-        call index_from_coords_vec(mesh%idx, stencil%size, jpcoords, jp)
-        
-        do istencil = 1, stencil%size
-          if(stencil%center == istencil) cycle
-
-          if(.not. gotit(jp(istencil))) then
-            jpart = point_to_part(jp(istencil))
-         
-            if(jpart /= ipart) then
-              INCR(nghost(ipart), 1)
-              is_a_neigh(ipart, jpart) = .true.
-            else if(jp(istencil) > mesh%np_global) then
-              INCR(nbound(ipart), 1)
-            end if
-            
-            gotit(jp(istencil)) = .true.
+        if(.not. gotit(jp(istencil))) then
+          jpart = point_to_part(jp(istencil))
+          
+          if(jpart /= ipart) then
+            INCR(nghost(ipart), 1)
+            is_a_neigh(jpart) = .true.
+          else if(jp(istencil) > mesh%np_global) then
+            INCR(nbound(ipart), 1)
           end if
           
-        end do
+          gotit(jp(istencil)) = .true.
+        end if
         
       end do
+      
     end do
-
-    forall(ipart = 1:npart)
-      nneigh(ipart) = count(is_a_neigh(ipart, 1:npart))
-    end forall
+    
+    nneigh(ipart) = count(is_a_neigh(1:npart))
 
     SAFE_DEALLOCATE_A(is_a_neigh)
     SAFE_DEALLOCATE_A(gotit)
     SAFE_DEALLOCATE_A(jpcoords)
     SAFE_DEALLOCATE_A(jp)
+
+#ifdef HAVE_MPI
+    call MPI_Allgather(MPI_IN_PLACE, 1, MPI_INTEGER, nneigh(1), 1, MPI_INTEGER, mesh%mpi_grp%comm, mpi_err)
+    call MPI_Allgather(MPI_IN_PLACE, 1, MPI_INTEGER, nlocal(1), 1, MPI_INTEGER, mesh%mpi_grp%comm, mpi_err)
+    call MPI_Allgather(MPI_IN_PLACE, 1, MPI_INTEGER, nghost(1), 1, MPI_INTEGER, mesh%mpi_grp%comm, mpi_err)
+    call MPI_Allgather(MPI_IN_PLACE, 1, MPI_INTEGER, nbound(1), 1, MPI_INTEGER, mesh%mpi_grp%comm, mpi_err)
+#endif
 
     ! Calculate partition quality
     scal = real(npart, REAL_PRECISION)/npoints
@@ -795,7 +800,7 @@ contains
     integer              :: iunit          ! For debug output to files.
     character(len=6)     :: filenum
 
-    if(.not. in_debug_mode) return
+    if(.not. debug%info) return
 
     PUSH_SUB(mesh_partition_messages_debug)
 

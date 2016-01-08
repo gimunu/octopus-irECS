@@ -16,7 +16,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: poisson.F90 14420 2015-07-02 15:43:09Z ravindra $
+!! $Id: poisson.F90 14884 2015-12-23 20:01:32Z xavier $
 
 #include "global.h"
 
@@ -968,10 +968,10 @@ contains
     
     call dio_function_output (io_function_fill_how('AxisX'), ".", "poisson_test_rho", mesh, rho, unit_one, ierr)
     call dio_function_output (io_function_fill_how('AxisX'), ".", "poisson_test_exact", mesh, vh_exact, unit_one, ierr)
-    call dio_function_output (io_function_fill_how('AxisX'), ".", "poisson_test_numerical", mesh, vh, unit_one, ierr)
+    call dio_function_output (io_function_fill_how('AxisX'), ".", "poisson_tedist%numerical", mesh, vh, unit_one, ierr)
     call dio_function_output (io_function_fill_how('AxisY'), ".", "poisson_test_rho", mesh, rho, unit_one, ierr)
     call dio_function_output (io_function_fill_how('AxisY'), ".", "poisson_test_exact", mesh, vh_exact, unit_one, ierr)
-    call dio_function_output (io_function_fill_how('AxisY'), ".", "poisson_test_numerical", mesh, vh, unit_one, ierr)
+    call dio_function_output (io_function_fill_how('AxisY'), ".", "poisson_tedist%numerical", mesh, vh, unit_one, ierr)
     ! not dimensionless, but no need for unit conversion for a test routine
 
     SAFE_DEALLOCATE_A(rho)

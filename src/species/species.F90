@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: species.F90 14827 2015-11-26 21:49:23Z xavier $
+!! $Id: species.F90 14976 2016-01-05 14:27:54Z xavier $
 #include "global.h"
 
 module species_m
@@ -782,7 +782,7 @@ contains
         call messages_warning()
       end if
 
-      if(in_debug_mode) then
+      if(debug%info) then
         write(dirname, '(a)') 'debug/geometry'
         call io_mkdir(dirname)
         call species_debug(trim(dirname), this)
@@ -1348,7 +1348,7 @@ contains
     if (spec%type /= SPECIES_USDEF ) write(iunit, '(a,i3)')    'lloc  = ', spec%lloc
 
     if(species_is_ps(spec)) then
-       if(in_debug_mode) call ps_debug(spec%ps, trim(dirname))
+       if(debug%info) call ps_debug(spec%ps, trim(dirname))
     end if
 
     call io_close(iunit)

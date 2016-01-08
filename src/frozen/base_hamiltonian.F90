@@ -169,6 +169,7 @@ module base_hamiltonian_m
     type(json_object_t),      pointer :: config =>null()
     type(base_system_t),      pointer :: sys    =>null()
     type(simulation_t),       pointer :: sim    =>null()
+    integer                           :: nspin  = 0
     real(kind=wp)                     :: energy = 0.0_wp
     type(storage_t)                   :: data
     type(hterm_dict_t)                :: hdct
@@ -394,7 +395,7 @@ contains
   end subroutine hterm__new__
 
   ! ---------------------------------------------------------
-  subroutine hterm__del__(this)
+  recursive subroutine hterm__del__(this)
     type(hterm_t), pointer :: this
 
     PUSH_SUB(hterm__del__)
@@ -936,6 +937,20 @@ contains
   end subroutine base_hamiltonian__del__
 
   ! ---------------------------------------------------------
+  subroutine base_hamiltonian__idel__(this)
+    type(base_hamiltonian_t), pointer :: this
+
+    PUSH_SUB(base_hamiltonian__idel__)
+
+    if(associated(this))then
+      SAFE_DEALLOCATE_P(this)
+    end if
+    nullify(this)
+
+    POP_SUB(base_hamiltonian__idel__)
+  end subroutine base_hamiltonian__idel__
+
+  ! ---------------------------------------------------------
   subroutine base_hamiltonian_new(this, that)
     type(base_hamiltonian_t),  target, intent(inout) :: this
     type(base_hamiltonian_t), pointer                :: that
@@ -949,18 +964,6 @@ contains
 
     POP_SUB(base_hamiltonian_new)
   end subroutine base_hamiltonian_new
-
-  ! ---------------------------------------------------------
-  subroutine base_hamiltonian__idel__(this)
-    type(base_hamiltonian_t), pointer :: this
-
-    PUSH_SUB(base_hamiltonian__idel__)
-
-    SAFE_DEALLOCATE_P(this)
-    nullify(this)
-
-    POP_SUB(base_hamiltonian__idel__)
-  end subroutine base_hamiltonian__idel__
 
   ! ---------------------------------------------------------
   subroutine base_hamiltonian_del(this)
@@ -990,20 +993,30 @@ contains
     type(base_system_t), target, intent(in)  :: sys
     type(json_object_t), target, intent(in)  :: config
 
-    integer :: type, nspn, ierr
-    logical :: allc
+    type(json_object_t), pointer :: cnfg
+    integer                      :: type, ierr
+    logical                      :: uspn
 
     PUSH_SUB(base_hamiltonian__iinit__)
 
+    nullify(cnfg)
     this%config => config
     this%sys => sys
     call json_get(this%config, "type", type, ierr)
     ASSERT(ierr==JSON_OK)
     ASSERT(type==HMLT_TYPE_HMLT)
-    call base_system_get(this%sys, nspin=nspn)
-    call json_get(this%config, "allocate", allc, ierr)
-    if(ierr/=JSON_OK) allc = .false.
-    call storage_init(this%data, ndim=nspn, full=.false., allocate=allc)
+    call base_system_get(this%sys, nspin=this%nspin)
+    call json_get(this%config, "spin", uspn, ierr)
+    if(ierr/=JSON_OK) uspn = .true.
+    if(.not.uspn) this%nspin = 1
+    ASSERT(this%nspin>0)
+    ASSERT(this%nspin<3)
+    call json_get(this%config, "storage", cnfg, ierr)
+    ASSERT(ierr==JSON_OK)
+    call json_set(cnfg, "full", .false.)
+    call json_set(cnfg, "dimensions", this%nspin)
+    call storage_init(this%data, cnfg)
+    nullify(cnfg)
     call hterm_dict_init(this%hdct)
     call config_dict_init(this%dict)
     call base_hamiltonian_hash_init(this%hash)
@@ -1023,7 +1036,7 @@ contains
     type(base_system_t),        pointer :: psys
     type(hterm_t),              pointer :: htrm
     character(len=CONFIG_DICT_NAME_LEN) :: attr, sysn
-    integer                             :: ierr
+    integer                             :: type, ierr
 
     PUSH_SUB(base_hamiltonian__init__type)
 
@@ -1035,6 +1048,8 @@ contains
       call json_next(iter, attr, cnfg, ierr)
       if(ierr==JSON_TYPE_ERROR)cycle
       if(ierr/=JSON_OK)exit
+      call json_get(cnfg, "type", type, ierr)
+      if(ierr/=JSON_OK)cycle
       psys => this%sys
       call json_get(cnfg, "system", sysn, ierr)
       if(ierr==JSON_OK) call base_system_gets(sys, sysn, psys)
@@ -1584,14 +1599,16 @@ contains
   end subroutine base_hamiltonian_set_info
 
   ! ---------------------------------------------------------
-  subroutine base_hamiltonian_get_info(this, size, nspin)
+  subroutine base_hamiltonian_get_info(this, size, nspin, use)
     type(base_hamiltonian_t), intent(in)  :: this
     integer,        optional, intent(out) :: size
     integer,        optional, intent(out) :: nspin
+    logical,        optional, intent(out) :: use
 
     PUSH_SUB(base_hamiltonian_get_info)
 
-    call storage_get(this%data, size=size, dim=nspin)
+    if(present(nspin)) nspin = this%nspin
+    call storage_get(this%data, size=size, alloc=use)
 
     POP_SUB(base_hamiltonian_get_info)
   end subroutine base_hamiltonian_get_info
@@ -1841,6 +1858,7 @@ contains
       call hterm__del__(htrm)
     end do
     nullify(htrm)
+    this%nspin = 0
     this%energy = 0.0_wp
     call storage_end(this%data)
     call hterm_dict_end(this%hdct)

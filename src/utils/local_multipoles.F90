@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: local_multipoles.F90 14701 2015-10-23 18:14:55Z jjornet $
+!! $Id: local_multipoles.F90 14997 2016-01-06 23:55:14Z xavier $
 
 #include "global.h"
 
@@ -75,8 +75,6 @@ program oct_local_multipoles
 
   call messages_init()
 
-  call messages_experimental("oct-local_multipoles utility")
-
   call io_init()
   call profiling_init()
  
@@ -84,6 +82,8 @@ program oct_local_multipoles
   call messages_print_stress(stdout, "Local Domains mode")
   call messages_print_stress(stdout)
     
+  call messages_experimental("oct-local_multipoles utility")
+
   call unit_system_init()
   call restart_module_init()
   call system_init(sys)
@@ -92,9 +92,9 @@ program oct_local_multipoles
 
   call local_domains()
 
+  call hamiltonian_end(hm)
   call simul_box_end(sb)
-  call geometry_end(sys%geo)
-  call space_end(sys%space)
+  call system_end(sys)
   call profiling_output()
   call profiling_end()
   call io_end()
@@ -137,8 +137,8 @@ contains
     call parse_variable('LDFolder', folder_default, folder)
 
     ! Check if the folder is finished by an /
-    if (index(folder, '/', .true.) /= len_trim(folder)) then
-      write(folder,'(a,a1)') trim(folder), '/'
+    if(index(folder, '/', back = .true.) /= len_trim(folder)) then
+      folder = trim(folder)//'/'
     end if
 
     default_dt = M_ZERO

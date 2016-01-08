@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: nl_operator.F90 14835 2015-11-27 16:18:33Z xavier $
+!! $Id: nl_operator.F90 14976 2016-01-05 14:27:54Z xavier $
 
 #include "global.h"
 
@@ -403,7 +403,7 @@ contains
       if (op%cmplx_op) then
         SAFE_ALLOCATE(op%w_im(1:op%stencil%size, 1:1))
       end if
-      if(in_debug_mode) then
+      if(debug%info) then
         message(1) = 'Info: nl_operator_build: working with constant weights.'
         call messages_info(1)
       end if
@@ -412,7 +412,7 @@ contains
       if (op%cmplx_op) then
         SAFE_ALLOCATE(op%w_im(1:op%stencil%size, 1:op%np))
       end if
-      if(in_debug_mode) then
+      if(debug%info) then
         message(1) = 'Info: nl_operator_build: working with non-constant weights.'
         call messages_info(1)
       end if
@@ -723,7 +723,7 @@ contains
 
     PUSH_SUB(nl_operator_update_weights)
 
-    if(in_debug_mode) then
+    if(debug%info) then
 
       write(message(1), '(3a)') 'Debug info: Finite difference weights for ', trim(this%label), '.'
       write(message(2), '(a)')  '            Spacing:'

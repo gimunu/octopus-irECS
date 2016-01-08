@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: eigen_arpack_inc.F90 14362 2015-06-24 17:02:22Z xavier $
+!! $Id: eigen_arpack_inc.F90 14976 2016-01-05 14:27:54Z xavier $
 
 subroutine X(eigensolver_arpack)(arpack, gr, st, hm, tolerance, current_rel_dens_error, niter, converged, ik, diff)
   type(eigen_arpack_t),intent(in)    :: arpack
@@ -50,7 +50,7 @@ subroutine X(eigensolver_arpack)(arpack, gr, st, hm, tolerance, current_rel_dens
   ASSERT(st%d%dim == 1)
 
   !Enable debug info
-  if(in_debug_mode) call arpack_debug()
+  if(debug%info) call arpack_debug()
   
   mpi_comm = mpi_world%comm
   if (gr%mesh%parallel_in_domains) mpi_comm = gr%mesh%mpi_grp%comm

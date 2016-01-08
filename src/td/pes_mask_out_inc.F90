@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: pes_mask_out_inc.F90 14662 2015-10-09 16:28:49Z xavier $
+!! $Id: pes_mask_out_inc.F90 14976 2016-01-05 14:27:54Z xavier $
 
 
 
@@ -138,7 +138,7 @@ subroutine pes_mask_pmesh(dim, kpoints, ll, LG, pmesh, idxZero, krng, Lp)
   SAFE_ALLOCATE(ikidx(maxval(nk(1:3)),1:3))
   call flip_sign_Lkpt_idx(dim, nk(:), ikidx(:,:))
   
-  if (in_debug_mode) then
+  if (debug%info) then
     print *,"reordered"
     do ik = krng(1),krng(2)
       kpt(1:dim) = kpoints_get_point(kpoints, ik, absolute_coordinates = .false.)
@@ -164,7 +164,7 @@ subroutine pes_mask_pmesh(dim, kpoints, ll, LG, pmesh, idxZero, krng, Lp)
     call sort(idx(1:ll(idir),idir),idx_inv(1:ll(idir),idir))
   end do  
   
-  if(in_debug_mode) then
+  if(debug%info) then
     do j1 = 1, ll(1)
       print *,j1, "LG = ",LG(j1,1),"LG_ = ",LG_(j1,1), "idx = ", idx(j1,1), "idx_inv = ", idx_inv(j1,1)
     end do
@@ -1001,7 +1001,7 @@ subroutine pes_mask_output_full_mapM_cut(pesK, file, ll, dim, pol, dir, integrat
     ! We set the z-axis along the pol vector 
     call generate_rotation_matrix(rotation, (/M_ZERO, M_ZERO, M_ONE/), pol )
 
-    if(in_debug_mode) then
+    if(debug%info) then
       print *,"Rotate z-axis over the zenith axis"
       print *,rotation(1,:)
       print *,rotation(2,:)
@@ -2092,7 +2092,7 @@ subroutine pes_mask_dump(restart, mask, st, ierr)
     return
   end if
 
-  if (in_debug_mode) then
+  if (debug%info) then
     message(1) = "Debug: Writing PES mask restart."
     call messages_info(1)
   end if
@@ -2160,7 +2160,7 @@ subroutine pes_mask_dump(restart, mask, st, ierr)
   end do
   if (err2 /= 0) ierr = ierr + 2
 
-  if (in_debug_mode) then
+  if (debug%info) then
     message(1) = "Debug: Writing PES mask restart done."
     call messages_info(1)
   end if
@@ -2193,7 +2193,7 @@ subroutine pes_mask_load(restart, mask, st, ierr)
     return
   end if
 
-  if (in_debug_mode) then
+  if (debug%info) then
     message(1) = "Debug: Reading PES mask restart."
     call messages_info(1)
   end if
@@ -2250,7 +2250,7 @@ subroutine pes_mask_load(restart, mask, st, ierr)
 
   SAFE_DEALLOCATE_A(rr)
 
-  if (in_debug_mode) then
+  if (debug%info) then
     message(1) = "Debug: Reading PES mask restart done."
     call messages_info(1)
   end if

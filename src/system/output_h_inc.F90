@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: output_h_inc.F90 14777 2015-11-16 11:50:24Z jrfsousa $
+!! $Id: output_h_inc.F90 14990 2016-01-06 20:25:42Z jrfsousa $
 
   ! ---------------------------------------------------------
   subroutine output_hamiltonian(hm, st, der, dir, outp, geo, grp)
@@ -27,15 +27,15 @@
     type(geometry_t),          intent(in)    :: geo
     type(mpi_grp_t), optional, intent(in)    :: grp !< the group that shares the same data, must contain the domains group
 
-    integer :: is, err, idir
+    integer :: is, err, idir, ispin
     character(len=MAX_PATH_LEN) :: fname
     type(base_potential_iterator_t)        :: iter
     type(base_potential_t),        pointer :: subsys_external
     type(base_hamiltonian_t),      pointer :: subsys_tnadd
     character(len=BASE_POTENTIAL_NAME_LEN) :: name
-    FLOAT,        dimension(:),   pointer :: xpot
-    FLOAT,        dimension(:,:), pointer :: tpot
-    FLOAT, allocatable :: v0(:,:), nxc(:)
+    FLOAT,         dimension(:),   pointer :: xpot
+    FLOAT,         dimension(:,:), pointer :: tnadd_potential
+    FLOAT, allocatable :: v0(:,:), nxc(:), potential(:)
     FLOAT, allocatable :: current(:, :, :)
 
     PUSH_SUB(output_hamiltonian)
@@ -81,24 +81,26 @@
             hm%vhartree + M_zI* hm%Imvhartree, units_out%energy, err, geo = geo, grp = grp)
         end if
 
-        nullify(subsys_tnadd, tpot)
+        nullify(subsys_tnadd, tnadd_potential)
         if(associated(hm%subsys_hm))then
           call base_hamiltonian_get(hm%subsys_hm, "tnadd", subsys_tnadd)
           ASSERT(associated(subsys_tnadd))
-          call base_hamiltonian_get(subsys_tnadd, tpot)
-          ASSERT(associated(tpot))
-          do is = 1, min(hm%d%ispin, 2)
-            if(hm%d%ispin == 1) then
+          call base_hamiltonian_get(subsys_tnadd, nspin=ispin)
+          call base_hamiltonian_get(subsys_tnadd, tnadd_potential)
+          ASSERT(associated(tnadd_potential))
+          nullify(subsys_tnadd)
+          do is = 1, min(ispin, 2)
+            if(ispin == 1) then
               write(fname, '(a)') 'tnadd'
             else
               write(fname, '(a,i1)') 'tnadd-sp', is
             end if
             call dio_function_output(outp%how, dir, fname, der%mesh, &
-              tpot(:,is), units_out%energy, err, geo = geo, grp = grp)
+              tnadd_potential(:,is), units_out%energy, err, geo = geo, grp = grp)
           end do
-          nullify(subsys_tnadd, tpot)
         end if
         
+        SAFE_ALLOCATE(potential(1:der%mesh%np))
         do is = 1, min(hm%d%ispin, 2)
           if(hm%d%ispin == 1) then
             write(fname, '(a)') 'vxc'
@@ -113,6 +115,11 @@
           end if
           
           ! finally the full KS potential (without non-local PP contributions)
+          if(associated(tnadd_potential))then
+            potential = hm%ep%vpsl + hm%vhxc(:, is) - tnadd_potential(:, min(is,ispin))
+          else
+            potential = hm%ep%vpsl + hm%vhxc(:, is)
+          end if
           if(hm%d%ispin == 1) then
             write(fname, '(a)') 'vks'
           else
@@ -120,18 +127,20 @@
           end if
           if (hm%ep%classical_pot > 0) then
             call dio_function_output(outp%how, dir, fname, der%mesh, &
-              hm%ep%vpsl + hm%ep%Vclassical + hm%vhxc(:, is), units_out%energy, err, geo = geo, grp = grp)
+              potential + hm%ep%Vclassical, units_out%energy, err, geo = geo, grp = grp)
           else
             if(.not. hm%cmplxscl%space) then
               call dio_function_output(outp%how, dir, fname, der%mesh, &
-                hm%ep%vpsl + hm%vhxc(:, is), units_out%energy, err, geo = geo, grp = grp)
+                potential, units_out%energy, err, geo = geo, grp = grp)
             else
               call zio_function_output(outp%how, dir, fname, der%mesh, &
-                hm%ep%vpsl + M_zI * hm%ep%Imvpsl + hm%vhxc(:, is) + M_zI * hm%Imvhxc(:, is), units_out%energy, &
+                potential + M_zI * hm%ep%Imvpsl + M_zI * hm%Imvhxc(:, is), units_out%energy, &
                 err, geo = geo, grp = grp)
             end if
           end if
         end do
+        SAFE_DEALLOCATE_A(potential)
+        nullify(tnadd_potential)
       end if
 
       if(hm%self_induced_magnetic) then

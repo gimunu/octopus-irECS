@@ -13,12 +13,11 @@ module ssys_config_m
   use global_m
   use json_m
   use kinds_m
-  use live_config_m
-  use live_handle_m
   use messages_m
   use parser_m
   use profiling_m
   use ssys_handle_m
+  use storage_m
   use unit_m
   use unit_system_m
 
@@ -26,8 +25,9 @@ module ssys_config_m
 
   private
 
-  public ::                &
-    ssys_config_parse_use, &
+  public ::            &
+    ssys_config_use,   &
+    ssys_config_add,   &
     ssys_config_parse
 
 contains
@@ -92,7 +92,7 @@ contains
 
     !%Variable SubSystemCoordinates
     !%Type block
-    !%Section System
+    !%Section System::Subsystems
     !%Description
     !% Lists the name of the subsystem, the coordinates and the rotation to apply uppon reading.
     !% A subsystem can figure multiple times.
@@ -147,7 +147,7 @@ contains
 
     !%Variable SubSystems
     !%Type block
-    !%Section System
+    !%Section System::Subsystems
     !%Description
     !% Lists the name, the subsystem type, the directory and the optional parameters to be used on the subsystem calculation.
     !%
@@ -205,10 +205,10 @@ contains
   end subroutine ssys_config_parse_subsystems_block
 
   ! ---------------------------------------------------------
-  subroutine ssys_config_parse_systems(this, ndim, nspin)
+  subroutine ssys_config_parse_systems(this, nspin, ndim)
     type(json_array_t), intent(inout) :: this
-    integer,            intent(in)    :: ndim
     integer,            intent(in)    :: nspin
+    integer,            intent(in)    :: ndim
 
     type(json_object_t)                 :: dict
     type(json_object_t),        pointer :: cnfg, ocfg, icfg
@@ -234,7 +234,7 @@ contains
       case(HNDL_TYPE_FNIO)
         if(.not.associated(frzn))then
           SAFE_ALLOCATE(cnfg)
-          call frozen_config_parse(cnfg, ndim, nspin)
+          call frozen_config_parse(cnfg, nspin, ndim)
           call json_append(this, cnfg)
           call json_get(cnfg, "systems", frzn, ierr)
           ASSERT(ierr==JSON_OK)
@@ -257,10 +257,17 @@ contains
   subroutine ssys_config_parse_external(this)
     type(json_object_t), intent(out) :: this
 
+    type(json_object_t), pointer :: cnfg
+
     PUSH_SUB(ssys_config_parse_external)
 
+    nullify(cnfg)
     call json_init(this)
     call json_set(this, "type", HMLT_TYPE_POTN)
+    SAFE_ALLOCATE(cnfg)
+    call storage_init(cnfg, full=.false.)
+    call json_set(this, "storage", cnfg)
+    nullify(cnfg)
 
     POP_SUB(ssys_config_parse_external)
   end subroutine ssys_config_parse_external
@@ -278,55 +285,84 @@ contains
   end subroutine ssys_config_parse_ionic
 
   ! ---------------------------------------------------------
-  subroutine ssys_config_parse_functional(this, id, factor)
+  subroutine ssys_config_parse_functional(this, id, factor, polarized)
     type(json_object_t), intent(out) :: this
     integer,             intent(in)  :: id
     real(kind=wp),       intent(in)  :: factor
+    logical,             intent(in)  :: polarized
+
+    type(json_object_t), pointer :: cnfg
 
     PUSH_SUB(ssys_config_parse_functional)
 
+    nullify(cnfg)
     call json_init(this)
     call json_set(this, "type", HMLT_TYPE_FNCT)
-    call json_set(this, "functional", id)
-    if(id>FUNCT_XC_NONE) call json_set(this, "factor", factor)
+    call json_set(this, "factor", factor)
+    call json_set(this, "spin", polarized)
+    SAFE_ALLOCATE(cnfg)
+    call functional_init(cnfg, id=id)
+    call json_set(this, "functional", cnfg)
+    nullify(cnfg)
+    SAFE_ALLOCATE(cnfg)
+    if(id>FUNCT_XC_NONE)then
+      call storage_init(cnfg, full=.false.)
+    else
+      call storage_init(cnfg, full=.false., allocate=.false.)
+    end if
+    call json_set(this, "storage", cnfg)
+    nullify(cnfg)
 
     POP_SUB(ssys_config_parse_functional)
   end subroutine ssys_config_parse_functional
 
   ! ---------------------------------------------------------
-  subroutine ssys_config_parse_tnadd(this)
+  subroutine ssys_config_parse_tnadd(this, nspin)
     type(json_object_t), intent(out) :: this
-
+    integer,             intent(in)  :: nspin
+ 
     type(json_object_t), pointer :: cnfg
     real(kind=wp)                :: factor
     integer                      :: id
-
-    !%Variable TnaddFactor
-    !%Type float
-    !%Default 1.0
-    !%Section Hamiltonian
-    !%Description
-    !% Chooses the Kinetic Functional amplification factor.
-    !%End
+    logical                      :: plrz
 
     PUSH_SUB(ssys_config_parse_tnadd)
 
     nullify(cnfg)
     call json_init(this)
     call json_set(this, "type", HMLT_TYPE_HMLT)
-    call json_set(this, "allocate", .true.)
+    SAFE_ALLOCATE(cnfg)
+    call storage_init(cnfg, full=.false., allocate=.true.)
+    call json_set(this, "storage", cnfg)
+    nullify(cnfg)
     call parse_variable('TnaddFunctional', FUNCT_XC_NONE, id)
+    !%Variable TnaddFactor
+    !%Type float
+    !%Default 1.0
+    !%Section Hamiltonian::Subsystems
+    !%Description
+    !% Chooses the Kinetic Functional amplification factor.
+    !%End
     call parse_variable('TnaddFactor', 1.0_wp, factor)
     if(abs(factor)<1.0e-7_wp)then
       message(1) = "The 'TnaddFactor' value specified may be too small."
       call messages_warning(1)
     end if
+    !%Variable TnaddPolarized
+    !%Type logical
+    !%Default yes
+    !%Section Hamiltonian::Subsystems
+    !%Description
+    !% Calculates the Kinetic Functional with spin polarization or not.
+    !%End
+    call parse_variable('TnaddPolarized', (nspin>1), plrz)
+    call json_set(this, "spin", plrz)
     SAFE_ALLOCATE(cnfg)
-    call ssys_config_parse_functional(cnfg, id, factor)
+    call ssys_config_parse_functional(cnfg, id, factor, plrz)
     call json_set(this, "total", cnfg)
     nullify(cnfg)
     SAFE_ALLOCATE(cnfg)
-    call ssys_config_parse_functional(cnfg, id, factor)
+    call ssys_config_parse_functional(cnfg, id, factor, plrz)
     call json_set(cnfg, "system", "live")
     call json_set(this, "live", cnfg)
     nullify(cnfg)
@@ -335,8 +371,9 @@ contains
   end subroutine ssys_config_parse_tnadd
 
   ! ---------------------------------------------------------
-  subroutine ssys_config_parse_hamiltonian(this)
+  subroutine ssys_config_parse_hamiltonian(this, nspin)
     type(json_object_t), intent(inout) :: this
+    integer,             intent(in)    :: nspin
 
     type(json_object_t), pointer :: cnfg
 
@@ -352,7 +389,7 @@ contains
     call json_set(this, "ionic", cnfg)
     nullify(cnfg)
     SAFE_ALLOCATE(cnfg)
-    call ssys_config_parse_tnadd(cnfg)
+    call ssys_config_parse_tnadd(cnfg, nspin)
     call json_set(this, "tnadd", cnfg)
     nullify(cnfg)
 
@@ -360,8 +397,9 @@ contains
   end subroutine ssys_config_parse_hamiltonian
 
   ! ---------------------------------------------------------
-  subroutine ssys_config_parse_model(this)
+  subroutine ssys_config_parse_model(this, nspin)
     type(json_object_t), intent(inout) :: this
+    integer,             intent(in)    :: nspin
 
     type(json_object_t), pointer :: cnfg
     integer                      :: ierr
@@ -371,29 +409,48 @@ contains
     nullify(cnfg)
     call json_get(this, "hamiltonian", cnfg, ierr)
     ASSERT(ierr==JSON_OK)
-    call ssys_config_parse_hamiltonian(cnfg)
+    call ssys_config_parse_hamiltonian(cnfg, nspin)
     nullify(cnfg)
 
     POP_SUB(ssys_config_parse_model)
   end subroutine ssys_config_parse_model
 
   ! ---------------------------------------------------------
-  function ssys_config_parse_use() result(that)
+  function ssys_config_use() result(that)
 
     logical :: that
 
-    PUSH_SUB(ssys_config_parse_use)
+    PUSH_SUB(ssys_config_use)
 
     that = parse_is_defined("SubSystems")
 
-    POP_SUB(ssys_config_parse_use)
-  end function ssys_config_parse_use
+    POP_SUB(ssys_config_use)
+  end function ssys_config_use
 
   ! ---------------------------------------------------------
-  subroutine ssys_config_parse(this, ndim, nspin)
+  subroutine ssys_config_add(this, that)
+    type(json_object_t), intent(inout) :: this
+    type(json_object_t), intent(in)    :: that
+
+    type(json_array_t), pointer :: list
+    integer                     :: ierr
+
+    PUSH_SUB(ssys_config_add)
+
+    nullify(list)
+    call json_get(this, "systems", list, ierr)
+    ASSERT(ierr==JSON_OK)
+    call json_append(list, that)
+    nullify(list)
+
+    POP_SUB(ssys_config_add)
+  end subroutine ssys_config_add
+
+  ! ---------------------------------------------------------
+  subroutine ssys_config_parse(this, nspin, ndim)
     type(json_object_t), intent(out) :: this
-    integer,             intent(in)  :: ndim
     integer,             intent(in)  :: nspin
+    integer,             intent(in)  :: ndim
 
     type(json_object_t), pointer :: cnfg
     type(json_array_t),  pointer :: list
@@ -402,19 +459,16 @@ contains
     PUSH_SUB(ssys_config_parse)
 
     nullify(cnfg, list)
-    call base_config_parse(this, ndim, nspin)
+    call base_config_parse(this, nspin, ndim)
     call json_set(this, "type", HNDL_TYPE_SSYS)
     call json_set(this, "name", "main")
     call json_get(this, "model", cnfg, ierr)
     ASSERT(ierr==JSON_OK)
-    call ssys_config_parse_model(cnfg)
+    call ssys_config_parse_model(cnfg, nspin)
     nullify(cnfg)
     call json_get(this, "systems", list, ierr)
     ASSERT(ierr==JSON_OK)
-    call ssys_config_parse_systems(list, ndim, nspin)
-    SAFE_ALLOCATE(cnfg)
-    call live_config_parse(cnfg, ndim, nspin)
-    call json_append(list, cnfg)
+    call ssys_config_parse_systems(list, nspin, ndim)
     nullify(cnfg, list)
 
     POP_SUB(ssys_config_parse)

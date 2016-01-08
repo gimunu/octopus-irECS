@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: global.h 14469 2015-07-28 20:53:01Z xavier $
+!! $Id: global.h 14974 2016-01-05 05:48:47Z xavier $
 
 #include "config_F90.h"
 #include "options.h"  
@@ -156,13 +156,13 @@
 ! pieces of code that call the push_sub and pop_sub routines defined
 ! in the messages_m module.
 #define PUSH_SUB(routine) \
-  if(in_debug_mode) then; _newline_ \
+  if(debug%trace) then; _newline_ \
     if(not_in_openmp()) then; _newline_ \
       call push_sub(__FILE__+"." _anl_ +TOSTRING(routine)); _newline_ \
     endif; _newline_ \
   endif
 #define POP_SUB(routine) \
-  if(in_debug_mode) then; _newline_ \
+  if(debug%trace) then; _newline_ \
     if(not_in_openmp()) then; _newline_ \
       call pop_sub(__FILE__+"." _anl_ +TOSTRING(routine)); _newline_ \
     endif; _newline_ \

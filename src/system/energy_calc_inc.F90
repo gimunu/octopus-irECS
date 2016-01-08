@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: energy_calc_inc.F90 14692 2015-10-23 00:01:40Z xavier $
+!! $Id: energy_calc_inc.F90 14976 2016-01-05 14:27:54Z xavier $
 
 
 ! ---------------------------------------------------------
@@ -39,7 +39,7 @@ subroutine X(calculate_eigenvalues)(hm, der, st, time)
     return
   end if
 
-  if(in_debug_mode) then
+  if(debug%info) then
     write(message(1), '(a)') 'Debug: Calculating eigenvalues.'
     call messages_info(1)
   end if

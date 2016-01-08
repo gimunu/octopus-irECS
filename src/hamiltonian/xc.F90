@@ -15,12 +15,13 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: xc.F90 14841 2015-11-29 08:32:23Z xavier $
+!! $Id: xc.F90 14842 2015-11-29 18:30:50Z xavier $
 
 #include "global.h"
 
 module xc_m
   use distributed_m
+  use comm_m
   use cube_m
   use cube_function_m
   use derivatives_m

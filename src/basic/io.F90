@@ -15,11 +15,12 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: io.F90 14221 2015-06-05 16:37:56Z xavier $
+!! $Id: io.F90 14976 2016-01-05 14:27:54Z xavier $
 
 #include "global.h"
 
 module io_m
+  use debug_m
   use global_m
   use loct_m
   use messages_m
@@ -147,11 +148,11 @@ contains
       call loct_rm('messages.stderr')
     end if
 
-    if(in_debug_mode) then
+    if(debug%info) then
       call io_mkdir('debug')
     end if
 
-    if(conf%debug_level >= 99) then
+    if(debug%trace_file) then
       !wipe out debug trace files from previous runs to start fresh rather than appending
       call delete_debug_trace()
     end if
@@ -159,7 +160,7 @@ contains
     ! create static directory
     call io_mkdir(STATIC_DIR)
 
-    if(in_debug_mode) then
+    if(debug%info) then
       !%Variable MPIDebugHook
       !%Type logical
       !%Default no
@@ -557,8 +558,7 @@ contains
     ! only root node performs the check
     if(mpi_grp_is_root(mpi_world)) then
       if(io_file_exists('enable_debug_mode', msg='Enabling DebugMode')) then
-        conf%debug_level = 99
-        in_debug_mode    = .true.
+        call debug_enable(debug)
         ! this call does not hurt if the directory is already there
         ! but is otherwise required
         call io_mkdir('debug')
@@ -567,6 +567,7 @@ contains
         ! artificially increase sub stack to avoid underflow
         no_sub_stack = no_sub_stack + 8
       end if
+
       if(io_file_exists('enable_flush_messages', msg='Enabling flushing of messages')) then
         flush_messages   = .true.
         ! we have been notified by the user, so we can cleanup the file
@@ -574,11 +575,11 @@ contains
       end if
 
       if(io_file_exists('disable_debug_mode', msg='Disabling DebugMode')) then
-        conf%debug_level = 0
-        in_debug_mode    = .false.
+        call debug_disable(debug)
         ! we have been notified by the user, so we can cleanup the file
         call loct_rm('disable_debug_mode')
       end if
+
       if(io_file_exists('disable_flush_messages', msg='Disabling flushing of messages')) then
         flush_messages   = .false.
         ! we have been notified by the user, so we can cleanup the file

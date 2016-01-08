@@ -1,4 +1,4 @@
-!! Copyright (C) 2011 D. Strubbe
+!! Copyright (C) 2011-2016 D. Strubbe, X. Andrade
 !!
 !! This program is free software; you can redistribute it and/or modify
 !! it under the terms of the GNU General Public License as published by
@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: output_berkeleygw_inc.F90 14221 2015-06-05 16:37:56Z xavier $
+!! $Id: output_berkeleygw_inc.F90 14953 2016-01-03 01:03:41Z xavier $
 
 subroutine X(bgw_vxc_dat)(bgw, dir, st, gr, hm, vxc)
   type(output_bgw_t),     intent(in)    :: bgw
@@ -27,6 +27,7 @@ subroutine X(bgw_vxc_dat)(bgw, dir, st, gr, hm, vxc)
 
   integer :: iunit, iunit_x, ispin, ik, ikk, ist, ist2, idiag, ioff, ndiag, noffdiag, spin_index(st%d%nspin)
   integer, allocatable :: diag(:), off1(:), off2(:)
+  logical :: set_null
   FLOAT :: kpoint(3)
   R_TYPE, allocatable :: psi(:,:), psi2(:), xpsi(:,:)
   CMPLX, allocatable :: mtxel(:,:), mtxel_x(:,:)
@@ -60,10 +61,15 @@ subroutine X(bgw_vxc_dat)(bgw, dir, st, gr, hm, vxc)
   end if
   SAFE_ALLOCATE(mtxel(1:ndiag + noffdiag, 1:st%d%nspin))
 
+  set_null = .false.
+  
   if(bgw%calc_exchange) then
     if(mpi_grp_is_root(mpi_world)) iunit_x = io_open(trim(dir) // 'x.dat', action='write')
     SAFE_ALLOCATE(xpsi(1:gr%mesh%np, 1))
-    if(.not. associated(hm%hf_st)) hm%hf_st => st
+    if(.not. associated(hm%hf_st)) then
+      hm%hf_st => st
+      set_null = .true.
+    end if
     SAFE_ALLOCATE(mtxel_x(1:ndiag + noffdiag, 1:st%d%nspin))
   end if
 
@@ -99,10 +105,10 @@ subroutine X(bgw_vxc_dat)(bgw, dir, st, gr, hm, vxc)
       do idiag = 1, ndiag
         call states_get_state(st, gr%mesh, 1, diag(idiag), ikk, psi(:, 1))
         ! multiplying psi*vxc first might be more efficient
-        mtxel(idiag, ispin) = X(mf_dotp)(gr%mesh, psi(:, 1), psi(:, 1) * vxc(:, ispin))
+        mtxel(idiag, ispin) = X(mf_dotp)(gr%mesh, psi(:, 1), psi(:, 1)*vxc(:, ispin))
         if(bgw%calc_exchange) then
-          xpsi(:,:) = M_ZERO
-          call X(exchange_operator)(hm, gr%der, psi, xpsi, ist, ikk, M_ONE)
+          xpsi(:, :) = M_ZERO
+          call X(exchange_operator_single)(hm, gr%der, ist, ikk, CNST(1.0), psi, xpsi)
           mtxel_x(idiag, ispin) = X(mf_dotp)(gr%mesh, psi(:, 1), xpsi(:, 1))
         end if
       end do
@@ -115,7 +121,7 @@ subroutine X(bgw_vxc_dat)(bgw, dir, st, gr, hm, vxc)
         ! FIXME: we should calc xpsi only for each state, not for each offdiag
         if(bgw%calc_exchange) then
           xpsi(:,:) = M_ZERO
-          call X(exchange_operator)(hm, gr%der, psi, xpsi, ist, ikk, M_ONE)
+          call X(exchange_operator_single)(hm, gr%der, ist, ikk, CNST(1.0), psi, xpsi)
           mtxel_x(ndiag + ioff, ispin) = R_CONJ(X(mf_dotp)(gr%mesh, psi2, xpsi(:, 1)))
         end if
       end do
@@ -133,6 +139,8 @@ subroutine X(bgw_vxc_dat)(bgw, dir, st, gr, hm, vxc)
     end if
   end do
 
+  if(set_null) nullify(hm%hf_st)
+  
   if(mpi_grp_is_root(mpi_world)) call io_close(iunit)
   SAFE_DEALLOCATE_A(diag)
   SAFE_DEALLOCATE_A(psi)

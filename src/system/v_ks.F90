@@ -15,12 +15,13 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: v_ks.F90 14809 2015-11-21 15:26:00Z askhl $
+!! $Id: v_ks.F90 14990 2016-01-06 20:25:42Z jrfsousa $
 
 #include "global.h"
  
 module v_ks_m
   use base_hamiltonian_m
+  use base_states_m
   use berry_m
   use current_m
   use density_m
@@ -47,6 +48,7 @@ module v_ks_m
   use profiling_m
   use pcm_m 
   use simul_box_m
+  use ssys_states_m
   use ssys_tnadd_m
   use states_m
   use states_dim_m
@@ -534,7 +536,7 @@ contains
 
     ks%calc%geo => geo
     
-    if(in_debug_mode) then
+    if(debug%info) then
       write(message(1), '(a)') 'Debug: Calculating Kohn-Sham potential.'
       call messages_info(1)
     end if
@@ -641,9 +643,11 @@ contains
 
       ! get density taking into account non-linear core corrections
       SAFE_ALLOCATE(ks%calc%density(1:ks%gr%fine%mesh%np, 1:st%d%nspin))
+      !> Calculate the subsystems total density.
+      if(associated(st%subsys_st)) call ssys_states_acc(st%subsys_st)
       if (.not. cmplxscl) then
         call states_total_density(st, ks%gr%fine%mesh, ks%calc%density)
-      else 
+      else
         SAFE_ALLOCATE(ks%calc%Imdensity(1:ks%gr%fine%mesh%np, 1:st%d%nspin))
         call states_total_density(st, ks%gr%fine%mesh, ks%calc%density, ks%calc%Imdensity)
       end if
@@ -801,6 +805,7 @@ contains
       CMPLX :: ctmp
       integer :: ispin
       FLOAT, allocatable :: vvdw(:)
+      FLOAT, dimension(:,:), pointer :: density
       
       PUSH_SUB(v_ks_calc_start.v_a_xc)
       call profiling_in(prof, "XC")
@@ -930,6 +935,13 @@ contains
 
         if(hm%d%ispin == SPINORS .and. cmplxscl) &
           call messages_not_implemented('Complex Scaling with SPINORS')
+        nullify(density)
+        if(associated(st%subsys_st))then
+          call base_states_get(st%subsys_st, density)
+          ASSERT(associated(density))
+        else
+          density => st%rho
+        end if
         do ispin = 1, hm%d%nspin
           if(ispin <= 2) then
             factor = M_ONE
@@ -938,7 +950,7 @@ contains
           end if
           if (.not. cmplxscl) then
             ks%calc%energy%intnvxc = ks%calc%energy%intnvxc + &
-              factor*dmf_dotp(ks%gr%fine%mesh, st%rho(:, ispin), ks%calc%vxc(:, ispin))
+              factor*dmf_dotp(ks%gr%fine%mesh, density(:, ispin), ks%calc%vxc(:, ispin))
           else
             ctmp = factor * zmf_dotp(ks%gr%fine%mesh, st%zrho%Re(:, ispin) + M_zI * st%zrho%Im(:, ispin), &
               ks%calc%vxc(:, ispin) + M_zI * ks%calc%Imvxc(:, ispin), dotu = .true.)
@@ -960,6 +972,7 @@ contains
     type(hamiltonian_t),  intent(inout) :: hm
 
     type(base_hamiltonian_t), pointer :: subsys_tnadd
+    FLOAT, dimension(:,:),    pointer :: potential
     integer                           :: ip, ispin
 
     PUSH_SUB(v_ks_calc_finish)
@@ -1060,15 +1073,6 @@ contains
         forall(ip = 1:ks%gr%mesh%np) hm%vhxc(ip, 1) = hm%vhxc(ip, 1) + hm%vberry(ip, 1)
       end if
 
-      ! Calculate subsystem kinetic non-additive term
-      nullify(subsys_tnadd)
-      if(associated(hm%subsys_hm))then
-        call base_hamiltonian_get(hm%subsys_hm, "tnadd", subsys_tnadd)
-        ASSERT(associated(subsys_tnadd))
-        call ssys_tnadd_calc(subsys_tnadd)
-        nullify(subsys_tnadd)
-      end if
-
       if(hm%d%ispin > UNPOLARIZED) then
         forall(ip = 1:ks%gr%mesh%np) hm%vhxc(ip, 2) = hm%vxc(ip, 2) + hm%vhartree(ip)
         if (hm%cmplxscl%space) forall(ip = 1:ks%gr%mesh%np) hm%Imvhxc(ip, 2) = hm%Imvxc(ip, 2) + hm%Imvhartree(ip)
@@ -1077,6 +1081,24 @@ contains
         end if
       end if
       
+      ! Calculate and add subsystem kinetic non-additive term
+      nullify(subsys_tnadd, potential)
+      if(associated(hm%subsys_hm))then
+        call base_hamiltonian_get(hm%subsys_hm, "tnadd", subsys_tnadd)
+        ASSERT(associated(subsys_tnadd))
+        call ssys_tnadd_calc(subsys_tnadd)
+        call base_hamiltonian_get(subsys_tnadd, nspin=ispin)
+        ASSERT(ispin<=hm%d%ispin)
+        call base_hamiltonian_get(subsys_tnadd, potential)
+        ASSERT(associated(potential))
+        nullify(subsys_tnadd)
+        forall (ip = 1:ks%gr%mesh%np) hm%vhxc(ip,1) = hm%vhxc(ip,1) + potential(ip,1)
+        if(hm%d%ispin>UNPOLARIZED)then
+          forall (ip = 1:ks%gr%mesh%np) hm%vhxc(ip,2) = hm%vhxc(ip,2) + potential(ip,ispin)
+        end if
+        nullify(potential)
+      end if
+
       if(hm%d%ispin == SPINORS) then
         forall(ispin = 3:4, ip = 1:ks%gr%mesh%np) hm%vhxc(ip, ispin) = hm%vxc(ip, ispin)
         if (hm%cmplxscl%space) forall(ispin = 3:4, ip = 1:ks%gr%mesh%np) hm%Imvhxc(ip, ispin) = hm%Imvxc(ip, ispin)
@@ -1187,7 +1209,7 @@ contains
     !> PCM reaction field due to the electronic density
     if (hm%pcm%run_pcm) then
     !> Generates the real-space PCM potential due to electrons during the SCF calculation.
-        call v_electrons_cav_li(hm%pcm%v_e, pot, hm%pcm)
+        call pcm_v_electrons_cav_li(hm%pcm%v_e, pot, hm%pcm)
         call pcm_charges(hm%pcm%q_e, hm%pcm%qtot_e, hm%pcm%v_e, hm%pcm%matrix, hm%pcm%n_tesserae) 
         call pcm_pot_rs( hm%pcm%v_e_rs, hm%pcm%q_e, hm%pcm%tess, hm%pcm%n_tesserae, ks%gr%mesh, hm%pcm%gaussian_width )
 

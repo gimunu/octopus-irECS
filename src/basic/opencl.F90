@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: opencl.F90 14690 2015-10-22 22:59:28Z jrfsousa $
+!! $Id: opencl.F90 14976 2016-01-05 14:27:54Z xavier $
 
 #include "global.h"
 
@@ -1003,7 +1003,7 @@ contains
       string = trim(string)//' '//trim(flags)
     end if
 
-    if(in_debug_mode) then
+    if(debug%info) then
       call messages_write("Debug info: compilation flags '"//trim(string), new_line = .true.)
       call messages_write('  '//trim(share_string)//"'.")
       call messages_info()

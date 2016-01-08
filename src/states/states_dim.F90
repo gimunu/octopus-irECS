@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: states_dim.F90 14693 2015-10-23 00:19:03Z xavier $
+!! $Id: states_dim.F90 14976 2016-01-05 14:27:54Z xavier $
 
 #include "global.h"
 
@@ -217,7 +217,7 @@ contains
       dd%kweights(iq) = kpoints_get_weight(sb%kpoints, ik)
     end do
 
-    if(in_debug_mode) call print_kpoints_debug
+    if(debug%info) call print_kpoints_debug
     POP_SUB(states_choose_kpoints)
 
   contains

@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: species_pot.F90 14626 2015-10-03 21:10:56Z xavier $
+!! $Id: species_pot.F90 14998 2016-01-07 00:04:27Z xavier $
 
 #include "global.h"
 
@@ -219,7 +219,7 @@ contains
 
       if(ps_has_density(ps)) then
 
-        ASSERT(allocated(ps%density))
+        ASSERT(associated(ps%density))
 
         rmax = CNST(0.0)
         do isp = 1, spin_channels

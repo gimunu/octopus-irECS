@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: poisson_multigrid.F90 14217 2015-06-05 00:54:11Z xavier $
+!! $Id: poisson_multigrid.F90 14976 2016-01-05 14:27:54Z xavier $
 
 #include "global.h"
 
@@ -216,7 +216,7 @@ contains
 
       if(resnorm < this%threshold) exit
 
-      if(in_debug_mode) then
+      if(debug%info) then
         write(message(1), '(a,i5,a,e13.6)') "Multigrid: base level: iter ", iter, " res ", resnorm
         call messages_info(1)
       end if

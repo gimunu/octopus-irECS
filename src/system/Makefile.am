@@ -17,7 +17,7 @@
 ## Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 ## 02110-1301, USA.
 ##
-## $Id: Makefile.am 14057 2015-05-21 04:26:43Z xavier $
+## $Id: Makefile.am 14889 2015-12-26 06:54:56Z xavier $
 
 noinst_LIBRARIES = libsystem.a
 
@@ -34,6 +34,7 @@ libsystem_a_SOURCES =         \
 	xc_oep.F90            \
 	xc_ks_inversion.F90   \
 	v_ks.F90              \
+	live_config.F90       \
 	output_fio.F90        \
 	output_me.F90         \
 	output.F90            \
@@ -61,7 +62,6 @@ noinst_HEADERS =                        \
 	eigen_plan_inc.F90              \
 	eigen_evolution_inc.F90         \
 	eigen_lobpcg_inc.F90            \
-	eigen_mg_inc.F90                \
 	eigen_rmmdiis_inc.F90           \
 	subspace_inc.F90                \
 	output_h_inc.F90                \
@@ -84,16 +84,17 @@ subspace.o : preconditioners.o subspace_inc.F90
 linear_solver.o : linear_solver.F90 linear_solver_inc.F90 preconditioners.o 
 eigen_cg.o: eigen_cg.F90 eigen_cg_inc.F90 preconditioners.o
 eigen_lobpcg.o: eigen_cg.F90 eigen_lobpcg_inc.F90 preconditioners.o
-eigensolver.o: eigensolver.F90 eigen_evolution_inc.F90 eigen_plan_inc.F90 eigen_mg_inc.F90 eigen_cg.o subspace.o eigen_lobpcg.o eigen_rmmdiis.o exponential.o eigen_arpack.o eigen_feast.o
+eigensolver.o: eigensolver.F90 eigen_evolution_inc.F90 eigen_plan_inc.F90 eigen_cg.o subspace.o eigen_lobpcg.o eigen_rmmdiis.o exponential.o eigen_arpack.o eigen_feast.o
 eigen_rmmdiis.o: eigen_rmmdiis.F90 eigen_rmmdiis_inc.F90 subspace.o
 eigen_arpack.o: eigen_arpack.F90 eigen_arpack_inc.F90
 eigen_feast.o: eigen_feast.F90 linear_solver.o
 xc_oep.o : xc_oep.F90 xc_oep_inc.F90 xc_oep_sic_inc.F90 xc_oep_x_inc.F90 xc_kli_inc.F90 xc_kli_pauli_inc.F90 linear_solver.o 
 xc_ks_inversion.o : eigensolver.o
 v_ks.o : v_ks.F90 xc_oep.o energy_calc.o magnetic.o xc_ks_inversion.o current.o
-system.o : system.F90 v_ks.o energy_calc.o elf.o output.o
+system.o : system.F90 v_ks.o energy_calc.o elf.o output.o live_config.o
 pert.o : pert.F90 pert_inc.F90
 output.o : output.F90 output_states_inc.F90 output_h_inc.F90 output_linear_response_inc.F90 output_etsf_inc.F90 output_berkeleygw_inc.F90 output_modelmb_inc.F90 output_me.o output_fio.o elf.o magnetic.o v_ks.o current.o
+live_config.o : live_config.F90
 output_fio.o: output_fio.F90
 output_me.o: output_me_inc.F90
 exponential.o : exponential.F90

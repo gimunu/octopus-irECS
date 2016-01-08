@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: pes_spm.F90 14770 2015-11-12 21:52:46Z philipp $
+!! $Id: pes_spm.F90 14976 2016-01-05 14:27:54Z xavier $
 
 #include "global.h"
 
@@ -37,6 +37,8 @@ module pes_spm_m
   use lasers_m
   use varinfo_m
   use mesh_interpolation_m
+
+  implicit none
 
   private
 
@@ -447,25 +449,29 @@ contains
 
 
   ! ---------------------------------------------------------
-  subroutine pes_spm_output(this, st, iter, dt)
+  subroutine pes_spm_output(this, mesh, st, iter, dt)
     type(pes_spm_t), intent(in) :: this
+    type(mesh_t),    intent(in) :: mesh
     type(states_t),  intent(in) :: st
     integer,         intent(in) :: iter
     FLOAT,           intent(in) :: dt
 
     integer            :: ist, ik, isdim
     integer            :: ii, jj
-    integer            :: isp, save_iter
+    integer            :: isp, save_iter, isp_save
     integer            :: iom, ith, iph, iphi
     FLOAT              :: omega, theta, phi
     CMPLX              :: vfu
     FLOAT              :: wfu
     FLOAT, allocatable :: wffttot(:,:)
-    FLOAT              :: wffttotsave
+    FLOAT              :: spctrsum, weight
     character(len=4)   :: filenr
-    integer            :: iunit, iunitone, iunittwo
+    integer            :: iunitone, iunittwo
+    integer            :: mdim
 
     PUSH_SUB(pes_spm_output)
+
+    mdim = mesh%sb%dim
 
     save_iter = this%save_iter
 
@@ -486,7 +492,7 @@ contains
       end do
     end if
 
-    if(.not. this%sphgrid .or. in_debug_mode) then   ! too much output for spherical grid
+    if(.not. this%sphgrid .or. debug%info) then   ! too much output for spherical grid
       do isp = 1, this%nspoints
         write(filenr, '(i4.4)') isp
    
@@ -519,69 +525,108 @@ contains
         if(this%recipe == M_PHASE) call io_close(iunittwo)
 
         if(this%onfly) then
-          iunit = io_open('td.general/'//'PES_spm.'//filenr//'.spectrum.out', action='write', position='rewind')
-          write(iunit, '(a44)') '# frequency, total spectrum, orbital spectra'
+          iunitone = io_open('td.general/'//'PES_spm.'//filenr//'.spectrum.out', action='write', position='rewind')
+          write(iunitone, '(a44)') '# frequency, total spectrum, orbital spectra'
           do iom = 1, this%nomega 
             omega = iom*this%delomega
-            write(iunit, '(e17.10, 1x, e17.10)', advance='no') omega, wffttot(iom, isp)
+            write(iunitone, '(e17.10, 1x, e17.10)', advance='no') omega, wffttot(iom, isp)
             do ik = 1, st%d%nik
               do ist = 1, st%nst 
                 do isdim = 1, st%d%dim
                   wfu = real(this%wfft(ist, isdim, ik, isp, iom))**2 + aimag(this%wfft(ist, isdim, ik, isp, iom))**2
-                  write(iunit,'(1x,e18.10e3)', advance='no') wfu
+                  write(iunitone,'(1x,e18.10e3)', advance='no') wfu
                 end do
               end do
             end do
-          write(iunit,'(1x)', advance='yes')
+          write(iunitone,'(1x)', advance='yes')
           end do
-          call io_close(iunit)
+          call io_close(iunitone)
         end if
    
       end do
     end if
 
     if(this%onfly .and. this%sphgrid) then
-      iunit = io_open('td.general/'//'PES_spm.distribution.out', action='write', position='rewind')
-      write(iunit, '(a33)') '# omega, theta, phi, distribution'
+      iunittwo = io_open('td.general/'//'PES_spm.distribution.out', action='write', position='rewind')
+      iunitone = io_open('td.general/'//'PES_spm.power.sum', action='write', position='rewind')
+      write(iunitone, '(a23)') '# omega, total spectrum'
 
-      do iom = 1, this%nomega
-        omega = iom * this%delomega
-        isp = 0
-        do ith = 0, this%nstepstheta
-          if(ith == 0) then
-            theta = this%thetamin     ! pi/2 for 1d and 2d. zero for 3d.
-          else
-            theta = ith * M_PI / this%nstepstheta
-          end if
-          do iph = 0, this%nstepsphi - 1
-            isp = isp + 1
-            if(iph == 0) then
-              wffttotsave = wffttot(iom, isp)
-              phi = M_ZERO
-            else
-              phi = iph * M_TWO * M_PI / this%nstepsphi
-            end if
-            write(iunit,'(5(1x,e18.10E3))') omega, theta, phi, wffttot(iom, isp)
+      select case(mdim)
+      case(1)
+        write(iunittwo, '(a40)') '# omega, distribution (left/right point)'
 
-            ! just repeat the result for output
-            if(iph == (this%nstepsphi - 1)) then
-              write(iunit,'(5(1x,e18.10E3))') omega, theta, M_TWO * M_PI, wffttotsave
-            end if
-             
-            ! just repeat the result for output
-            if(theta == M_ZERO .or. theta == M_PI) then
-              do iphi = 1, this%nstepsphi
-                phi = iphi * M_TWO * M_PI / this%nstepsphi
-                write(iunit,'(5(1x,e18.10E3))') omega, theta, phi, wffttot(iom, isp)
-              end do
-              exit
-            end if
-          end do
-          if(this%nstepsphi > 0) write(iunit, '(1x)', advance='yes')
+        do iom = 1, this%nomega
+          omega = iom * this%delomega
+          write(iunittwo, '(5(1x,e18.10E3))') omega, wffttot(iom, 2), wffttot(iom, 1)
+          write(iunitone, '(2(1x,e18.10E3))') omega, sum(wffttot(iom, :)) / M_TWO
         end do
-        if(this%nstepsphi == 0) write(iunit, '(1x)', advance='yes')
-      end do
-      call io_close(iunit)
+
+      case(2)
+        write(iunittwo, '(a26)') '# omega, phi, distribution'
+
+        do iom = 1, this%nomega
+          omega = iom * this%delomega
+
+          spctrsum = M_ZERO
+          do iph = 0, this%nstepsphi - 1
+            spctrsum = spctrsum + wffttot(iom, iph + 1) * this%nstepsphi / M_TWO / M_PI
+            phi = iph * M_TWO * M_PI / this%nstepsphi
+            write(iunittwo,'(5(1x,e18.10E3))') omega, phi, wffttot(iom, iph + 1)
+          end do
+          ! just repeat the result for output
+          write(iunittwo,'(5(1x,e18.10E3))') omega, M_TWO * M_PI, wffttot(iom, 1)
+          write(iunittwo, '(1x)', advance='yes')
+          write(iunitone, '(2(1x,e18.10E3))') omega, spctrsum
+        end do
+
+      case(3)
+        write(iunittwo, '(a33)') '# omega, theta, phi, distribution'
+
+        do iom = 1, this%nomega
+          omega = iom * this%delomega
+          isp = 0
+          spctrsum = M_ZERO
+
+          do ith = 0, this%nstepstheta
+            theta = ith * M_PI / this%nstepstheta
+
+            if(ith == 0 .or. ith == this%nstepstheta) then
+              weight = (M_ONE - cos(M_PI / this%nstepstheta / M_TWO)) * M_TWO * M_PI
+            else
+              weight = abs(cos(theta - M_PI / this%nstepstheta / M_TWO) - cos(theta + M_PI / this%nstepstheta / M_TWO)) &
+                * M_TWO * M_PI / this%nstepsphi
+            end if
+
+            do iph = 0, this%nstepsphi - 1
+              isp = isp + 1
+              spctrsum = spctrsum + wffttot(iom, isp) * weight
+
+              phi = iph * M_TWO * M_PI / this%nstepsphi
+              if(iph == 0) isp_save = isp
+              write(iunittwo,'(5(1x,e18.10E3))') omega, theta, phi, wffttot(iom, isp)
+   
+              ! just repeat the result for output
+              if(iph == (this%nstepsphi - 1)) then
+                write(iunittwo,'(5(1x,e18.10E3))') omega, theta, M_TWO * M_PI, wffttot(iom, isp_save)
+              end if
+               
+              ! just repeat the result for output
+              if(theta == M_ZERO .or. theta == M_PI) then
+                do iphi = 1, this%nstepsphi
+                  phi = iphi * M_TWO * M_PI / this%nstepsphi
+                  write(iunittwo,'(5(1x,e18.10E3))') omega, theta, phi, wffttot(iom, isp)
+                end do
+                exit
+              end if
+            end do
+
+            write(iunittwo, '(1x)', advance='yes')
+          end do
+          write(iunitone, '(2(1x,e18.10E3))') omega, spctrsum * this%delomega
+        end do
+      end select
+      call io_close(iunittwo)
+      call io_close(iunitone)
 
     end if
 
@@ -606,7 +651,7 @@ contains
 
     xx = M_ZERO
     if(mpi_grp_is_root(mpi_world)) then
-      if(.not. this%sphgrid .or. in_debug_mode) then   ! too much output for spherical grid
+      if(.not. this%sphgrid .or. debug%info) then   ! too much output for spherical grid
         do isp = 1, this%nspoints
           write(filenr, '(i4.4)') isp
    
@@ -662,13 +707,13 @@ contains
       return
     end if
     
-    if (in_debug_mode) then
+    if (debug%info) then
       message(1) = "Debug: Writing PES_spm restart."
       call messages_info(1)
     end if
 
     if(this%onfly) then 
-      call zrestart_write_binary(restart, 'this', this%nspoints*st%d%dim*st%nst*st%d%nik*this%nomega, &
+      call zrestart_write_binary(restart, 'pesspm', this%nspoints*st%d%dim*st%nst*st%d%nik*this%nomega, &
         this%wfft, err) 
     end if
 
@@ -680,7 +725,7 @@ contains
 
     if (err /= 0) ierr = ierr + 1
     
-    if (in_debug_mode) then
+    if (debug%info) then
       message(1) = "Debug: Writing PES_spm restart done."
       call messages_info(1)
     end if
@@ -708,13 +753,13 @@ contains
       return
     end if
     
-    if (in_debug_mode) then
+    if (debug%info) then
       message(1) = "Debug: Reading PES_spm restart."
       call messages_info(1)
     end if
 
     if(this%onfly) then
-      call zrestart_read_binary(restart, 'this', this%nspoints*st%d%dim*st%nst*st%d%nik*this%nomega, &
+      call zrestart_read_binary(restart, 'pesspm', this%nspoints*st%d%dim*st%nst*st%d%nik*this%nomega, &
         this%wfft, err)
     end if
 
@@ -726,7 +771,7 @@ contains
 
     if (err /= 0) ierr = ierr + 1
     
-    if(in_debug_mode) then
+    if(debug%info) then
       message(1) = "Debug: Reading PES_spm restart done."
       call messages_info(1)
     end if

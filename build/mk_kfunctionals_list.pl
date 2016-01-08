@@ -17,7 +17,7 @@
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 # 02110-1301, USA.
 #
-# $Id: mk_kfunctionals_list.pl 13739 2015-04-05 22:00:49Z jrfsousa $
+# $Id: mk_kfunctionals_list.pl 14991 2016-01-06 21:07:13Z jrfsousa $
 
 
 use Getopt::Std;
@@ -58,7 +58,7 @@ print OUT <<"EndOfHeader";
 !
 !%Variable TnaddFunctional
 !%Type integer
-!%Section Hamiltonian
+!%Section Hamiltonian::Subsystems
 !%Description
 !% Defines the Kinetic Functional to be used in a Subsystem calculation,
 !% For more information on the functionals, see

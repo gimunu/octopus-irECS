@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: mix.F90 14798 2015-11-19 18:24:50Z xavier $
+!! $Id: mix.F90 14976 2016-01-05 14:27:54Z xavier $
 
 #include "global.h"
 
@@ -293,7 +293,7 @@ contains
       return
     end if
 
-    if (in_debug_mode) then
+    if (debug%info) then
       message(1) = "Debug: Writing mixing restart."
       call messages_info(1)
     end if
@@ -367,7 +367,7 @@ contains
       if (err2(4) /= 0) ierr = ierr + 16
     end if
 
-    if (in_debug_mode) then
+    if (debug%info) then
       message(1) = "Debug: Writing mixing restart done."
       call messages_info(1)
     end if
@@ -400,7 +400,7 @@ contains
       return
     end if
 
-    if (in_debug_mode) then
+    if (debug%info) then
       message(1) = "Debug: Reading mixing restart."
       call messages_info(1)
     end if
@@ -499,7 +499,7 @@ contains
       call mix_clear(smix)
     end if
 
-    if (in_debug_mode) then
+    if (debug%info) then
       message(1) = "Debug: Reading mixing restart done."
       call messages_info(1)
     end if

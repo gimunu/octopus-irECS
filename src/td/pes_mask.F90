@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: pes_mask.F90 14607 2015-09-28 21:16:10Z xavier $
+!! $Id: pes_mask.F90 14976 2016-01-05 14:27:54Z xavier $
 
 #include "global.h"
 
@@ -513,7 +513,7 @@ contains
       mask%fs_n_global = mask%cube%fs_n_global 
     end if 
 
-    if(in_debug_mode) then
+    if(debug%info) then
       print *,mpi_world%rank, "mask%ll                  ", mask%ll(:)
       print *,mpi_world%rank, "mask%cube%fs_n_global(:) ", mask%cube%fs_n_global(:)      
       print *,mpi_world%rank, "mask%cube%fs_n(:)        ", mask%cube%fs_n(:)

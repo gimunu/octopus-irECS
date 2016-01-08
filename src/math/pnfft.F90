@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: pnfft.F90 14486 2015-07-30 10:29:37Z dannert $
+!! $Id: pnfft.F90 14976 2016-01-05 14:27:54Z xavier $
 
 #include "global.h"
 
@@ -502,7 +502,7 @@ contains
 
     PUSH_SUB(pnfft_messages_debug)
 
-    if(in_debug_mode) then
+    if(debug%info) then
   
       if(mpi_grp_is_root(mpi_world)) then
         call io_mkdir('debug/PNFFT')

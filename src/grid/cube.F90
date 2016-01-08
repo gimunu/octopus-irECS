@@ -16,7 +16,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: cube.F90 14787 2015-11-18 22:02:02Z umberto $
+!! $Id: cube.F90 14976 2016-01-05 14:27:54Z xavier $
 
 #include "global.h"
 
@@ -637,7 +637,7 @@ contains
     
     PUSH_SUB(cube_partition_messages_debug)
 
-    if(in_debug_mode) then
+    if(debug%info) then
       SAFE_ALLOCATE(part(1:cube%mpi_grp%size))
       call cube_partition(cube, part)
   

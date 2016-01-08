@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: states_parallel_inc.F90 14793 2015-11-19 06:06:52Z xavier $
+!! $Id: states_parallel_inc.F90 14885 2015-12-23 21:02:38Z xavier $
 
 subroutine X(states_parallel_gather_3)(st, dims, psi)
   type(states_t), intent(in)    :: st
@@ -31,7 +31,7 @@ subroutine X(states_parallel_gather_3)(st, dims, psi)
 
   if(st%parallel_in_states) then
 
-    maxst = maxval(st%st_num(0:st%mpi_grp%size - 1))
+    maxst = maxval(st%dist%num(0:st%mpi_grp%size - 1))
     
     SAFE_ALLOCATE(sendpsi(1:dims(1), 1:dims(2), 1:maxst))
     SAFE_ALLOCATE(recvpsi(1:dims(1), 1:dims(2), 1:maxst*st%mpi_grp%size))
@@ -86,11 +86,11 @@ subroutine X(states_parallel_gather_1)(st, aa)
     SAFE_ALLOCATE(displs(0:st%mpi_grp%size - 1))
     
     sendaa(st%st_start:st%st_end) = aa(st%st_start:st%st_end)
-    displs(0:st%mpi_grp%size - 1) = st%st_range(1, 0:st%mpi_grp%size - 1) - 1
+    displs(0:st%mpi_grp%size - 1) = st%dist%range(1, 0:st%mpi_grp%size - 1) - 1
     
 #ifdef HAVE_MPI
     call MPI_Allgatherv(sendaa(st%st_start), st%lnst, R_MPITYPE, &
-      aa(1), st%st_num(0), displs(0), R_MPITYPE, st%mpi_grp%comm, mpi_err)
+      aa(1), st%dist%num(0), displs(0), R_MPITYPE, st%mpi_grp%comm, mpi_err)
 #endif
 
     SAFE_DEALLOCATE_A(sendaa)

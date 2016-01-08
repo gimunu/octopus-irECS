@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: states_calc_inc.F90 14791 2015-11-19 05:04:26Z xavier $
+!! $Id: states_calc_inc.F90 14921 2015-12-29 17:54:03Z xavier $
 
 ! ---------------------------------------------------------
 !> Orthonormalizes nst orbitals in mesh (honours state parallelization).
@@ -96,6 +96,7 @@ contains
   ! -----------------------------------------------------------------------------------------------
   subroutine cholesky_parallel()
 
+    R_TYPE, allocatable :: psi(:, :, :)
     integer             :: psi_block(1:2), total_np
 #ifdef HAVE_SCALAPACK
     integer             :: info, nbl, nrow, ncol
@@ -121,17 +122,21 @@ contains
 
     call states_parallel_blacs_blocksize(st, mesh, psi_block, total_np)
 
-#ifdef HAVE_SCALAPACK
-    ASSERT(associated(st%X(dontusepsi)))
+    SAFE_ALLOCATE(psi(1:mesh%np_part, 1:st%d%dim, st%st_start:st%st_end))
+
+    call states_get_state(st, mesh, ik, psi)
+    
     ! We need to set to zero some extra parts of the array
     if(st%d%dim == 1) then
-     st%X(dontusepsi)(mesh%np + 1:psi_block(1), 1:st%d%dim, st%st_start:st%st_end, ik) = M_ZERO
+     psi(mesh%np + 1:psi_block(1), 1:st%d%dim, st%st_start:st%st_end) = M_ZERO
     else
-     st%X(dontusepsi)(mesh%np + 1:mesh%np_part, 1:st%d%dim, st%st_start:st%st_end, ik) = M_ZERO
+     psi(mesh%np + 1:mesh%np_part, 1:st%d%dim, st%st_start:st%st_end) = M_ZERO
     end if
 
+#ifdef HAVE_SCALAPACK
+    
     call descinit(psi_desc(1), total_np, st%nst, psi_block(1), psi_block(2), 0, 0, st%dom_st_proc_grid%context, &
-      st%d%dim*ubound(st%X(dontusepsi), dim = 1), info)
+      st%d%dim*ubound(psi, dim = 1), info)
 
     if(info /= 0) then
       write(message(1),'(3a,i6)') "descinit for psi failed in ", TOSTRING(X(states_orthogonalization_full)), &
@@ -156,7 +161,7 @@ contains
     ss = M_ZERO
 
     call pblas_herk(uplo = 'U', trans = 'C', n = st%nst, k = total_np, &
-      alpha = R_TOTYPE(mesh%vol_pp(1)), a = st%X(dontusepsi)(1, 1, st%st_start, ik), ia = 1, ja = 1, desca = psi_desc(1), &
+      alpha = R_TOTYPE(mesh%vol_pp(1)), a = psi(1, 1, st%st_start), ia = 1, ja = 1, desca = psi_desc(1), &
       beta = R_TOTYPE(M_ZERO), c = ss(1, 1), ic = 1, jc = 1, descc = ss_desc(1))
 
     ! calculate the Cholesky decomposition
@@ -170,13 +175,16 @@ contains
 
     call pblas_trsm(side = 'R', uplo = 'U', transa = 'N', diag = 'N', m = total_np, n = st%nst, &
       alpha = R_TOTYPE(M_ONE), a = ss(1, 1), ia = 1, ja = 1, desca = ss_desc(1), &
-      b = st%X(dontusepsi)(1, 1, st%st_start, ik), ib = 1, jb = 1, descb = psi_desc(1))
+      b = psi(1, 1, st%st_start), ib = 1, jb = 1, descb = psi_desc(1))
+
+#endif
 
     call profiling_count_operations(dble(mesh%np)*dble(nst)**2*(R_ADD + R_MUL))
 
     SAFE_DEALLOCATE_A(ss)
-#endif
 
+    call states_set_state(st, mesh, ik, psi)
+    
     POP_SUB(X(states_orthogonalization_full).cholesky_parallel)
   end subroutine cholesky_parallel
 
@@ -186,9 +194,9 @@ contains
 
     integer :: ist, jst, idim
     FLOAT   :: cc
-    R_TYPE, allocatable :: aa(:)
+    R_TYPE, allocatable :: aa(:), psii(:, :), psij(:, :)
     FLOAT,  allocatable :: bb(:)
-
+    
     PUSH_SUB(X(states_orthogonalization_full).mgs)
 
     if(st%parallel_in_states) then
@@ -197,19 +205,22 @@ contains
     end if
 
     SAFE_ALLOCATE(bb(1:nst))
+    SAFE_ALLOCATE(psii(1:mesh%np, 1:st%d%dim))
+    SAFE_ALLOCATE(psij(1:mesh%np, 1:st%d%dim))
 
-    ASSERT(associated(st%X(dontusepsi)))
     ! normalize the initial vectors
     do ist = 1, nst
-      bb(ist) = &
-        TOFLOAT(X(mf_dotp)(mesh, st%d%dim, st%X(dontusepsi)(:, :, ist, ik), st%X(dontusepsi)(:, :, ist, ik), reduce = .false.))
+      call states_get_state(st, mesh, ist, ik, psii)
+      bb(ist) = TOFLOAT(X(mf_dotp)(mesh, st%d%dim, psii, psii, reduce = .false.))
+      call states_set_state(st, mesh, ist, ik, psii)
     end do
 
     if(mesh%parallel_in_domains) call comm_allreduce(mesh%mpi_grp%comm, bb, dim = nst)
 
-    do ist = 1, nst      
+    do ist = 1, nst
+      call states_get_state(st, mesh, ist, ik, psii)
       do idim = 1, st%d%dim
-        call lalg_scal(mesh%np, M_ONE/sqrt(bb(ist)), st%X(dontusepsi)(:, idim, ist, ik))
+        call lalg_scal(mesh%np, M_ONE/sqrt(bb(ist)), psii(:, idim))
       end do
     end do
 
@@ -218,28 +229,40 @@ contains
     SAFE_ALLOCATE(aa(1:nst))
 
     do ist = 1, nst
+
+      call states_get_state(st, mesh, ist, ik, psii)
+      
       ! calculate the projections
       do jst = 1, ist - 1
-        aa(jst) = X(mf_dotp)(mesh, st%d%dim, st%X(dontusepsi)(:, :, jst, ik), st%X(dontusepsi)(:, :, ist, ik), reduce = .false.)
+        call states_get_state(st, mesh, jst, ik, psij)
+        aa(jst) = X(mf_dotp)(mesh, st%d%dim, psij, psii, reduce = .false.)
       end do
 
       if(mesh%parallel_in_domains .and. ist > 1) call comm_allreduce(mesh%mpi_grp%comm, aa, dim = ist - 1)
 
       ! subtract the projections
       do jst = 1, ist - 1
+        call states_get_state(st, mesh, jst, ik, psij)
         do idim = 1, st%d%dim
-          call lalg_axpy(mesh%np, -aa(jst), st%X(dontusepsi)(:, idim, jst, ik), st%X(dontusepsi)(:, idim, ist, ik))
+          call lalg_axpy(mesh%np, -aa(jst), psij(:, idim), psii(:, idim))
         end do
       end do
 
       ! renormalize
-      cc = TOFLOAT(X(mf_dotp)(mesh, st%d%dim, st%X(dontusepsi)(:, :, ist, ik), st%X(dontusepsi)(:, :, ist, ik)))
+      cc = TOFLOAT(X(mf_dotp)(mesh, st%d%dim, psii, psii))
+
       do idim = 1, st%d%dim
-        call lalg_scal(mesh%np, M_ONE/sqrt(cc), st%X(dontusepsi)(:, idim, ist, ik))
+        call lalg_scal(mesh%np, M_ONE/sqrt(cc), psii(:, idim))
       end do
+
+      call states_set_state(st, mesh, ist, ik, psii)
+      
     end do
 
+    SAFE_DEALLOCATE_A(psii)
+    SAFE_DEALLOCATE_A(psij)
     SAFE_DEALLOCATE_A(aa)
+
     POP_SUB(X(states_orthogonalization_full).mgs)
   end subroutine mgs
 
@@ -268,16 +291,7 @@ subroutine X(states_trsm)(st, mesh, ik, ss)
   PUSH_SUB(X(states_trsm))
   call profiling_in(prof, "STATES_TRSM")
 
-  if(associated(st%X(dontusepsi)) .and. .not. states_are_packed(st) .and. .not. st%parallel_in_states) then
-
-    do idim = 1, st%d%dim
-      ! multiply by the inverse of ss
-      call blas_trsm('R', 'U', 'N', 'N', mesh%np, st%nst, R_TOTYPE(M_ONE), ss(1, 1), st%nst, &
-        st%X(dontusepsi)(1, idim, 1, ik), ubound(st%X(dontusepsi), dim = 1)*st%d%dim)
-
-    end do
-
-  else if(.not. (states_are_packed(st) .and. opencl_is_enabled())) then
+  if(.not. (states_are_packed(st) .and. opencl_is_enabled())) then
 
 #ifdef R_TREAL  
     block_size = max(40, hardware%l2%size/(2*8*st%nst))
@@ -865,6 +879,7 @@ subroutine X(states_matrix)(mesh, st1, st2, aa)
   R_TYPE,         intent(out) :: aa(:, :, :)
 
   integer :: ii, jj, dim, ik
+  R_TYPE, allocatable :: psi1(:, :), psi2(:, :)
 #if defined(HAVE_MPI)
   R_TYPE, allocatable :: phi2(:, :)
   integer :: kk, ll, ist
@@ -875,65 +890,82 @@ subroutine X(states_matrix)(mesh, st1, st2, aa)
   PUSH_SUB(X(states_matrix))
 
   dim = st1%d%dim
-  ASSERT(associated(st1%X(dontusepsi)))
-  ASSERT(associated(st2%X(dontusepsi)))
+
+  SAFE_ALLOCATE(psi1(1:mesh%np, 1:st1%d%dim))
+  SAFE_ALLOCATE(psi2(1:mesh%np, 1:st1%d%dim))
 
   do ik = st1%d%kpt%start, st1%d%kpt%end
 
-  if(st1%parallel_in_states) then
+    if(st1%parallel_in_states) then
 
 #if defined(HAVE_MPI)
-    call MPI_Barrier(st1%mpi_grp%comm, mpi_err)
-    ! Each process sends the states in st2 to the rest of the processes.
-    do ist = st1%st_start, st1%st_end
-      do jj = 0, st1%mpi_grp%size - 1
-        if(st1%mpi_grp%rank /= jj) then
-          call MPI_Isend(st2%X(dontusepsi)(1, 1, ist, ik), st1%d%dim*mesh%np, R_MPITYPE, &
-            jj, ist, st1%mpi_grp%comm, request, mpi_err)
-        end if
-      end do
-    end do
-
-    ! Processes are received, and then the matrix elements are calculated.
-    SAFE_ALLOCATE(phi2(1:mesh%np, 1:st1%d%dim))
-    do jj = 1, st2%nst
-      ll = st1%node(jj)
-      if(ll /= st1%mpi_grp%rank) then
-        call MPI_Irecv(phi2(1, 1), st1%d%dim*mesh%np, R_MPITYPE, ll, jj, st1%mpi_grp%comm, request, mpi_err)
-        call MPI_Wait(request, status, mpi_err)
-      else
-        phi2(:, :) = st2%X(dontusepsi)(:, :, jj, ik)
-      end if
+      call MPI_Barrier(st1%mpi_grp%comm, mpi_err)
+      ! Each process sends the states in st2 to the rest of the processes.
       do ist = st1%st_start, st1%st_end
-        aa(ist, jj, ik) = X(mf_dotp)(mesh, dim, st1%X(dontusepsi)(:, :, ist, ik), phi2(:, :))
+        call states_get_state(st2, mesh, ist, ik, psi2)
+        do jj = 0, st1%mpi_grp%size - 1
+          if(st1%mpi_grp%rank /= jj) then
+            call MPI_Isend(psi2(1, 1), st1%d%dim*mesh%np, R_MPITYPE, jj, ist, st1%mpi_grp%comm, request, mpi_err)
+          end if
+        end do
       end do
-    end do
-    SAFE_DEALLOCATE_A(phi2)
 
-    ! Each process holds some lines of the matrix. So it is broadcasted (All processes
-    ! should get the whole matrix)
-    call MPI_Barrier(st1%mpi_grp%comm, mpi_err)
-    do ii = 1, st1%nst
-      kk = st1%node(ii)
+      ! Processes are received, and then the matrix elements are calculated.
+      SAFE_ALLOCATE(phi2(1:mesh%np, 1:st1%d%dim))
       do jj = 1, st2%nst
-        call MPI_Bcast(aa(ii, jj, ik), 1, R_MPITYPE, kk, st1%mpi_grp%comm, mpi_err)
+
+        ll = st1%node(jj)
+
+        if(ll /= st1%mpi_grp%rank) then
+          call MPI_Irecv(phi2(1, 1), st1%d%dim*mesh%np, R_MPITYPE, ll, jj, st1%mpi_grp%comm, request, mpi_err)
+          call MPI_Wait(request, status, mpi_err)
+        else
+          call states_get_state(st2, mesh, jj, ik, phi2)
+        end if
+
+        do ist = st1%st_start, st1%st_end
+          call states_get_state(st1, mesh, ist, ik, psi1)
+          aa(ist, jj, ik) = X(mf_dotp)(mesh, dim, psi1, phi2)
+        end do
+
       end do
-    end do
+      SAFE_DEALLOCATE_A(phi2)
+
+      ! Each process holds some lines of the matrix. So it is broadcasted (All processes
+      ! should get the whole matrix)
+      call MPI_Barrier(st1%mpi_grp%comm, mpi_err)
+      do ii = 1, st1%nst
+        kk = st1%node(ii)
+        do jj = 1, st2%nst
+          call MPI_Bcast(aa(ii, jj, ik), 1, R_MPITYPE, kk, st1%mpi_grp%comm, mpi_err)
+        end do
+      end do
 #else
-    write(message(1), '(a)') 'Internal error at Xstates_matrix'
-    call messages_fatal(1)
+      write(message(1), '(a)') 'Internal error at Xstates_matrix'
+      call messages_fatal(1)
 #endif
 
-  else
+    else
 
-    do ii = st1%st_start, st1%st_end
-      do jj = st2%st_start, st2%st_end
-        aa(ii, jj, ik) = X(mf_dotp)(mesh, dim, st1%X(dontusepsi)(:, :, ii, ik), st2%X(dontusepsi)(:, :, jj, ik))
+      do ii = st1%st_start, st1%st_end
+
+        call states_get_state(st1, mesh, ii, ik, psi1)
+
+        do jj = st2%st_start, st2%st_end
+
+          call states_get_state(st2, mesh, jj, ik, psi2)
+
+          aa(ii, jj, ik) = X(mf_dotp)(mesh, dim, psi1, psi2)
+
+        end do
       end do
-    end do
-  end if
+
+    end if
 
   end do
+
+  SAFE_DEALLOCATE_A(psi1)
+  SAFE_DEALLOCATE_A(psi2)    
 
   POP_SUB(X(states_matrix))
 end subroutine X(states_matrix)
@@ -1080,13 +1112,7 @@ subroutine X(states_rotate)(mesh, st, uu, ik)
 
   ASSERT(R_TYPE_VAL == states_type(st))
   
-  if(associated(st%X(dontusepsi)) .and. .not. states_are_packed(st) .and. .not. st%parallel_in_states) then
-
-    call batch_init(psib, st%d%dim, 1, st%nst, st%X(dontusepsi)(:, :, :, ik))
-    call X(mesh_batch_rotate)(mesh, psib, uu)
-    call batch_end(psib)
-
-  else if(.not. states_are_packed(st) .or. .not. opencl_is_enabled()) then
+  if(.not. states_are_packed(st) .or. .not. opencl_is_enabled()) then
     
 #ifdef R_TREAL  
     block_size = max(40, hardware%l2%size/(2*8*st%nst))
@@ -1199,12 +1225,11 @@ end subroutine X(states_rotate)
 
 ! ---------------------------------------------------------
 
-subroutine X(states_calc_overlap)(st, mesh, ik, overlap, psi2)
+subroutine X(states_calc_overlap)(st, mesh, ik, overlap)
   type(states_t),    intent(inout) :: st
   type(mesh_t),      intent(in)    :: mesh
   integer,           intent(in)    :: ik
   R_TYPE,            intent(out)   :: overlap(:, :)
-  R_TYPE, optional,  intent(in)    :: psi2(:, :, :) !< if present it calculates <psi2|psi>
 
   integer :: ip, ib, jb, block_size, sp, size
 #ifndef R_TREAL
@@ -1223,25 +1248,7 @@ subroutine X(states_calc_overlap)(st, mesh, ik, overlap, psi2)
 
   call profiling_in(prof, "STATES_OVERLAP")
 
-  if(associated(st%X(dontusepsi)) .and. .not. states_are_packed(st) .and. .not. st%parallel_in_states) then
-
-    call batch_init(psib, st%d%dim, 1, st%nst, st%X(dontusepsi)(:, :, :, ik))
-
-    if(.not. present(psi2)) then
-
-      call X(mesh_batch_dotp_self)(mesh, psib, overlap)
-
-    else
-
-      call batch_init(psi2b, st%d%dim, 1, st%nst, psi2)
-      call X(mesh_batch_dotp_matrix)(mesh, psi2b, psib, overlap)
-      call batch_end(psi2b)
-
-    end if
-
-    call batch_end(psib)
-
-  else if(.not. states_are_packed(st) .or. .not. opencl_is_enabled()) then
+  if(.not. states_are_packed(st) .or. .not. opencl_is_enabled()) then
 
 #ifdef R_TREAL  
     block_size = max(80, hardware%l2%size/(8*st%nst))
@@ -1357,8 +1364,6 @@ subroutine X(states_calc_overlap)(st, mesh, ik, overlap, psi2)
 #endif
 
   else
-
-    ASSERT(.not. present(psi2))
 
     do ib = st%group%block_start, st%group%block_end
       do jb = ib, st%group%block_end

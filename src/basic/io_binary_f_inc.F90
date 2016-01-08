@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: io_binary_f_inc.F90 14528 2015-09-05 14:51:04Z philipp $
+!! $Id: io_binary_f_inc.F90 14861 2015-12-02 13:55:11Z philipp $
 
   subroutine X(write_header)(fname, np_global, ierr)
     character(len=*),    intent(in)  :: fname
@@ -296,6 +296,23 @@
 
     POP_SUB(X(read_binary3))
   end subroutine X(read_binary3)
+
+  !------------------------------------------------------
+
+  subroutine X(read_binary4)(fname, np, ff, ierr)
+    character(len=*),    intent(in)  :: fname
+    integer,             intent(in)  :: np
+    R_TYPE,              intent(out) :: ff(:,:,:,:)
+    integer,             intent(out) :: ierr
+
+    PUSH_SUB(X(read_binary4))
+
+    ASSERT(product(ubound(ff)) >= np)
+
+    call read_binary(np, 0, ff(1,1,1,1), R_TYPE_IOBINARY, ierr, trim(fname))
+
+    POP_SUB(X(read_binary4))
+  end subroutine X(read_binary4)
 
   !------------------------------------------------------
 

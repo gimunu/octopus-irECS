@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: td_calc.F90 13649 2015-03-29 11:12:38Z micael $
+!! $Id: td_calc.F90 14976 2016-01-05 14:27:54Z xavier $
 
 #include "global.h"
 
@@ -273,7 +273,7 @@ subroutine td_calc_ionch(gr, st, ch, Nch)
       SAFE_ALLOCATE(idx0(0:ii-1))
     end if 
 !     print *,"size(idx0,1)=",size(idx0,1)
-    if(in_debug_mode) then
+    if(debug%info) then
       call messages_write("P(")
       call messages_write(ii)
       call messages_write(") = 0")
@@ -283,7 +283,7 @@ subroutine td_calc_ionch(gr, st, ch, Nch)
     do
       prod  = M_ONE
       prod0 = M_ONE
-      if(in_debug_mode) then
+      if(debug%info) then
         call messages_write("P(")
         call messages_write(ii)
         call messages_write(") += ")
@@ -292,7 +292,7 @@ subroutine td_calc_ionch(gr, st, ch, Nch)
       idx(:) = idxref(:)
       do jj = 0, ii-1
         idx(idx0(jj))= -1
-        if(in_debug_mode) then
+        if(debug%info) then
           call messages_write(" No(")
           call messages_write(idx0(jj)+1)
           call messages_write(") ")
@@ -302,7 +302,7 @@ subroutine td_calc_ionch(gr, st, ch, Nch)
 
       do jj = 0, Nid
         if(idx(jj)>=0) then
-          if(in_debug_mode) then
+          if(debug%info) then
             call messages_write(" N(")
             call messages_write(idx(jj)+1)
             call messages_write(") ")
@@ -311,7 +311,7 @@ subroutine td_calc_ionch(gr, st, ch, Nch)
         end if
       end do
       
-      if(in_debug_mode) call messages_new_line()
+      if(debug%info) call messages_new_line()
 
       ch(ii) = ch(ii) + prod*prod0
 
@@ -321,7 +321,7 @@ subroutine td_calc_ionch(gr, st, ch, Nch)
     SAFE_DEALLOCATE_A(idx0)
     call loct_combination_end(c)
 
-    if(in_debug_mode) call messages_info()
+    if(debug%info) call messages_info()
   end do 
 
   SAFE_DEALLOCATE_A(idx)

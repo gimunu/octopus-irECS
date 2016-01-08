@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: io_binary_f.F90 14528 2015-09-05 14:51:04Z philipp $
+!! $Id: io_binary_f.F90 14976 2016-01-05 14:27:54Z xavier $
 
 #include "global.h"
 #include "io_binary.h"
@@ -56,6 +56,7 @@ module io_binary_m
     module procedure dread_binary, zread_binary, iread_binary
     module procedure iread_binary2, zread_binary2, dread_binary2
     module procedure zread_binary3, iread_binary3, dread_binary3
+    module procedure zread_binary4, iread_binary4, dread_binary4
     module procedure zread_binary5, iread_binary5, dread_binary5
   end interface io_binary_read
 
@@ -167,7 +168,7 @@ contains
     call get_info_binary(read_np, number_type, file_size, ierr, fname)
     ! if the type of the file is real, then read real numbers and convert to complex
     if (number_type /= TYPE_DOUBLE_COMPLEX) then
-      if (in_debug_mode) then
+      if (debug%info) then
         write(message(1),'(a,i2,a,i2)') "Debug: Found type = ", number_type, " instead of ", TYPE_DOUBLE_COMPLEX
         call messages_info(1)
       end if
@@ -202,7 +203,7 @@ contains
     call get_info_binary(read_np, number_type, file_size, ierr, fname)
     ! if the type of the file is real, then read real numbers and convert to complex
     if (number_type /= TYPE_DOUBLE_COMPLEX) then
-      if (in_debug_mode) then
+      if (debug%info) then
         write(message(1),'(a,i2,a,i2)') "Debug: Found type = ", number_type, " instead of ", TYPE_DOUBLE_COMPLEX
         call messages_info(1)
       end if

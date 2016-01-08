@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: vxc_inc.F90 14841 2015-11-29 08:32:23Z xavier $
+!! $Id: vxc_inc.F90 14976 2016-01-05 14:27:54Z xavier $
 
 subroutine xc_get_vxc(der, xcs, st, rho, ispin, ioniz_pot, qtot, vxc, ex, ec, deltaxc, vtau)
   type(derivatives_t),  intent(in)    :: der             !< Discretization and the derivative operators and details
@@ -34,7 +34,7 @@ subroutine xc_get_vxc(der, xcs, st, rho, ispin, ioniz_pot, qtot, vxc, ex, ec, de
   ! Formerly vxc was optional, but I removed this since we always pass vxc, and this simplifies the routine
   ! and avoids some optimization problems. --DAS
 
-  integer, parameter :: N_BLOCK_MAX = 1000
+  integer, parameter :: N_BLOCK_MAX = 10000
   integer :: n_block
 
   ! Local blocks (with the correct memory order for libxc):
@@ -70,7 +70,7 @@ subroutine xc_get_vxc(der, xcs, st, rho, ispin, ioniz_pot, qtot, vxc, ex, ec, de
   FLOAT, allocatable :: unp_dens(:), unp_dedd(:)
 
   integer :: ib, ip, isp, families, ixc, spin_channels, is, idir, ipstart, ipend
-  FLOAT   :: rr
+  FLOAT   :: rr, energy(1:2)
   logical :: gga, mgga
   type(profile_t), save :: prof, prof_libxc
   logical :: calc_energy
@@ -207,6 +207,7 @@ subroutine xc_get_vxc(der, xcs, st, rho, ispin, ioniz_pot, qtot, vxc, ex, ec, de
             l_zk(1), l_dedd(1,1), l_vsigma(1,1), l_dedldens(1,1), l_dedtau(1,1))
 
         case default
+          call profiling_out(prof_libxc)
           cycle
         end select
 
@@ -234,6 +235,7 @@ subroutine xc_get_vxc(der, xcs, st, rho, ispin, ioniz_pot, qtot, vxc, ex, ec, de
             l_dedd(1,1), l_vsigma(1,1), l_dedldens(1,1), l_dedtau(1,1))
 
         case default
+          call profiling_out(prof_libxc)
           cycle
         end select
         
@@ -317,14 +319,40 @@ subroutine xc_get_vxc(der, xcs, st, rho, ispin, ioniz_pot, qtot, vxc, ex, ec, de
 
   call local_deallocate()
 
+  ! calculate the energy, we do the integrals directly so when the data
+  ! is fully distributed we do not need to allgather first
+  if(calc_energy) then
+
+    energy(1:2) = CNST(0.0)
+    
+    if(der%mesh%use_curvilinear) then
+      do ip = ipstart, ipend
+        energy(1) = energy(1) + ex_per_vol(ip)*der%mesh%vol_pp(ip)
+        energy(2) = energy(2) + ec_per_vol(ip)*der%mesh%vol_pp(ip)
+      end do
+    else
+      do ip = ipstart, ipend
+        energy(1) = energy(1) + ex_per_vol(ip)
+        energy(2) = energy(2) + ec_per_vol(ip)
+      end do
+    end if
+    
+    energy(1:2) = energy(1:2)*der%mesh%volume_element
+
+    if(xcs%parallel) then
+      call comm_allreduce(st%dom_st_kpt_mpi_grp%comm, energy)
+    else if(der%mesh%parallel_in_domains) then
+      call comm_allreduce(der%mesh%mpi_grp%comm, energy)
+    end if
+
+    ex = ex + energy(1)
+    ec = ec + energy(2)
+    
+  end if
+
   if(xcs%parallel) then
     if(distribution%parallel) then
       call profiling_in(prof_gather, "XC_GATHER")
-      
-      if(calc_energy) then
-        call distributed_allgather(distribution, ex_per_vol)
-        call distributed_allgather(distribution, ec_per_vol)
-      end if
       
       do isp = 1, spin_channels
         call distributed_allgather(distribution, dedd(:, isp))
@@ -376,23 +404,18 @@ subroutine xc_get_vxc(der, xcs, st, rho, ispin, ioniz_pot, qtot, vxc, ex, ec, de
       ! contains the correction applied to the xc potential.
       do is = 1, spin_channels
         do ip = 1, der%mesh%np
-          ex_per_vol(ip) = ex_per_vol(ip) &
-            + vx(ip)*(CNST(3.0)*rho(ip, is) + sum(der%mesh%x(ip, 1:der%mesh%sb%dim)*gdens(ip, 1:der%mesh%sb%dim, is)))
+          ex_per_vol(ip) = vx(ip)*(CNST(3.0)*rho(ip, is) + sum(der%mesh%x(ip, 1:der%mesh%sb%dim)*gdens(ip, 1:der%mesh%sb%dim, is)))
         end do
       end do
     end if
+
+    if(calc_energy) ex = ex + dmf_integrate(der%mesh, ex_per_vol)
   end if
 
   ! this has to be done in inverse order
   if(mgga) call mgga_process()
   if( gga) call  gga_process()
   call lda_process()
-
-  if(calc_energy) then
-    ! integrate energies per unit volume
-    ex = ex + dmf_integrate(der%mesh, ex_per_vol)
-    ec = ec + dmf_integrate(der%mesh, ec_per_vol)
-  end if
 
   ! clean up allocated memory
   call lda_end()
@@ -417,6 +440,7 @@ contains
 
     PUSH_SUB(xc_get_vxc.copy_global_to_local)
 
+    !$omp parallel do
     do ib = 1, n_block
       local(1:spin_channels, ib) = global(ib + ip - 1, 1:spin_channels)
     end do
@@ -436,6 +460,7 @@ contains
 
     PUSH_SUB(xc_get_vxc.copy_local_to_global)
 
+    !$omp parallel do
     do ib = 1, n_block
       global(ib + ip - 1, 1:spin_channels) = global(ib + ip - 1, 1:spin_channels) + local(1:spin_channels, ib)
     end do
@@ -502,25 +527,35 @@ contains
     end if
 
     SAFE_ALLOCATE(dedd(1:der%mesh%np_part, 1:spin_channels))
-    dedd = M_ZERO
-    
-    do ii = 1, der%mesh%np
-      d(1:spin_channels) = rho(ii, 1:spin_channels)
 
-      select case(ispin)
-      case(UNPOLARIZED)
-        dens(ii, 1) = max(d(1), M_ZERO)
-      case(SPIN_POLARIZED)
-        dens(ii, 1) = max(d(1), M_ZERO)
-        dens(ii, 2) = max(d(2), M_ZERO)
-      case(SPINORS)
+    select case(ispin)
+    case(UNPOLARIZED)
+      !$omp parallel do
+      do ii = 1, der%mesh%np
+        dedd(ii, 1) = CNST(0.0)
+        dens(ii, 1) = max(rho(ii, 1), M_ZERO)
+      end do
+
+    case(SPIN_POLARIZED)
+      !$omp parallel do
+      do ii = 1, der%mesh%np
+        dedd(ii, 1:2) = CNST(0.0)
+        dens(ii, 1) = max(rho(ii, 1), M_ZERO)
+        dens(ii, 2) = max(rho(ii, 2), M_ZERO)
+      end do
+
+    case(SPINORS)
+      do ii = 1, der%mesh%np
+        dedd(ii, 1:spin_channels) = CNST(0.0)
+        d(1:spin_channels) = rho(ii, 1:spin_channels)
         dtot = d(1) + d(2)
         dpol = sqrt((d(1) - d(2))**2 + &
           M_FOUR*(rho(ii, 3)**2 + rho(ii, 4)**2))
         dens(ii, 1) = max(M_HALF*(dtot + dpol), M_ZERO)
         dens(ii, 2) = max(M_HALF*(dtot - dpol), M_ZERO)
-      end select
-    end do
+      end do
+
+    end select
 
     POP_SUB(xc_get_vxc.lda_init)
   end subroutine lda_init
@@ -801,7 +836,7 @@ subroutine xc_density_correction_calc(xcs, der, nspin, density, refvx, vxc, delt
   forall(ip = 1:der%mesh%np) lrvxc(ip) = CNST(-1.0)/(CNST(4.0)*M_PI)*refvx(ip)
   call dderivatives_lapl(der, lrvxc, nxc)
 
-  if(in_debug_mode) then
+  if(debug%info) then
     call dio_function_output(OPTION__OUTPUTFORMAT__AXIS_X, "./static", "rho", der%mesh, density(:, 1), unit_one, ierr)
     call dio_function_output(OPTION__OUTPUTFORMAT__AXIS_X, "./static", "vxcorig", der%mesh, refvx(:), unit_one, ierr)
     call dio_function_output(OPTION__OUTPUTFORMAT__AXIS_X, "./static", "nxc", der%mesh, nxc, unit_one, ierr)
@@ -815,7 +850,7 @@ subroutine xc_density_correction_calc(xcs, der, nspin, density, refvx, vxc, delt
     done = .false.
 
     INCR(iter, 1)
-    if(in_debug_mode) then
+    if(debug%info) then
       if(mpi_world%rank == 0) then
         write(number, '(i4)') iter
         iunit = io_open('qxc.'//trim(adjustl(number)), action='write')
@@ -828,7 +863,7 @@ subroutine xc_density_correction_calc(xcs, der, nspin, density, refvx, vxc, delt
       end if
 
       x1 = x1*CNST(1.01)
-      if(in_debug_mode) then
+      if(debug%info) then
         if(mpi_world%rank == 0) then
           write(iunit, *) x1, qxc
         end if
@@ -897,7 +932,7 @@ subroutine xc_density_correction_calc(xcs, der, nspin, density, refvx, vxc, delt
     end if
   end do
 
-  if(in_debug_mode) then
+  if(debug%info) then
     call dio_function_output(OPTION__OUTPUTFORMAT__AXIS_X, "./static", "nxcmod", der%mesh, nxc, unit_one, ierr)
   
     if(mpi_world%rank == 0) then
@@ -913,7 +948,7 @@ subroutine xc_density_correction_calc(xcs, der, nspin, density, refvx, vxc, delt
     end do
   end if
 
-  if(in_debug_mode) then
+  if(debug%info) then
     call dio_function_output(OPTION__OUTPUTFORMAT__AXIS_X, "./static", "fulldiffvxc.ax", der%mesh, lrvxc, unit_one, ierr)
     call dio_function_output(OPTION__OUTPUTFORMAT__AXIS_Y, "./static", "fulldiffvxc.ax", der%mesh, lrvxc, unit_one, ierr)
     call dio_function_output(OPTION__OUTPUTFORMAT__AXIS_Z, "./static", "fulldiffvxc.ax", der%mesh, lrvxc, unit_one, ierr)
@@ -940,7 +975,7 @@ subroutine xc_density_correction_calc(xcs, der, nspin, density, refvx, vxc, delt
     end if
   end do
 
-  if(in_debug_mode) then
+  if(debug%info) then
     call dio_function_output(OPTION__OUTPUTFORMAT__AXIS_X, "./static", "diffvxc.ax", der%mesh, lrvxc, unit_one, ierr)
     call dio_function_output(OPTION__OUTPUTFORMAT__AXIS_Y, "./static", "diffvxc.ax", der%mesh, lrvxc, unit_one, ierr)
     call dio_function_output(OPTION__OUTPUTFORMAT__AXIS_Z, "./static", "diffvxc.ax", der%mesh, lrvxc, unit_one, ierr)
@@ -948,7 +983,7 @@ subroutine xc_density_correction_calc(xcs, der, nspin, density, refvx, vxc, delt
   
   dd = dmf_integrate(der%mesh, lrvxc)/vol
 
-  if(in_debug_mode) then
+  if(debug%info) then
     if(mpi_world%rank == 0) then
       print*, "DD",  -CNST(2.0)*dd, -CNST(2.0)*mindd, -CNST(2.0)*maxdd
     end if
@@ -956,7 +991,7 @@ subroutine xc_density_correction_calc(xcs, der, nspin, density, refvx, vxc, delt
   
   if(present(deltaxc)) deltaxc = -CNST(2.0)*dd
 
-  if(in_debug_mode) then
+  if(debug%info) then
     call dio_function_output(OPTION__OUTPUTFORMAT__AXIS_X, "./static", "fnxc", der%mesh, nxc, unit_one, ierr)
   end if
   

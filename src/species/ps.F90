@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: ps.F90 14680 2015-10-21 03:46:34Z xavier $
+!! $Id: ps.F90 14998 2016-01-07 00:04:27Z xavier $
 
 #include "global.h"
 
@@ -118,8 +118,8 @@ module ps_m
                                   !< local potential in terms of r^2, to avoid the sqrt
     type(spline_t) :: nlr         !< the charge density associated with the long-range part
     
-    type(spline_t), allocatable :: density(:)      !< the atomic density for each spin
-    type(spline_t), allocatable :: density_der(:)  !< the radial derivative for the atomic density for each spin
+    type(spline_t), pointer :: density(:)      !< the atomic density for each spin
+    type(spline_t), pointer :: density_der(:)  !< the radial derivative for the atomic density for each spin
     
     logical :: is_separated
     logical :: local
@@ -150,6 +150,30 @@ contains
 
     PUSH_SUB(ps_init)
 
+    ! Fix the threshold to calculate the radius of the projector-function localization spheres:
+
+    call messages_obsolete_variable('SpecieProjectorSphereThreshold', 'SpeciesProjectorSphereThreshold')
+
+    !%Variable SpeciesProjectorSphereThreshold
+    !%Type float
+    !%Default 0.001
+    !%Section System::Species
+    !%Description
+    !% The pseudopotentials may be composed of a local part, and a linear combination of nonlocal
+    !% operators. These nonlocal projectors have "projector" form, <math> \left| v \right> \left< v \right| </math>
+    !% (or, more generally speaking, <math> \left| u \right> \left< v \right| </math>).
+    !% These projectors are localized in real space -- that is, the function <math>v</math>
+    !% has a finite support around the nucleus. This region where the projectors are localized should
+    !% be small or else the computation time required to operate with them will be very large.
+    !% 
+    !% In practice, this localization is fixed by requiring the definition of the projectors to be
+    !% contained in a sphere of a certain radius. This radius is computed by making sure that the 
+    !% absolute value of the projector functions, at points outside the localization sphere, is 
+    !% below a certain threshold. This threshold is set by <tt>SpeciesProjectorSphereThreshold</tt>.
+    !%End
+    call parse_variable('SpeciesProjectorSphereThreshold', CNST(0.001), ps%projectors_sphere_threshold)
+    if(ps%projectors_sphere_threshold <= M_ZERO) call messages_input_error('SpeciesProjectorSphereThreshold')
+   
     ! Sets the flavour, label, and number of spin channels.
     ps%flavour = ps_get_type(filename)
     ps%label   = label
@@ -338,30 +362,6 @@ contains
         call spline_der(ps%density(is), ps%density_der(is))
       end do
     end if
-
-    ! Fix the threshold to calculate the radius of the projector-function localization spheres:
-
-    call messages_obsolete_variable('SpecieProjectorSphereThreshold', 'SpeciesProjectorSphereThreshold')
-
-    !%Variable SpeciesProjectorSphereThreshold
-    !%Type float
-    !%Default 0.001
-    !%Section System::Species
-    !%Description
-    !% The pseudopotentials may be composed of a local part, and a linear combination of nonlocal
-    !% operators. These nonlocal projectors have "projector" form, <math> \left| v \right> \left< v \right| </math>
-    !% (or, more generally speaking, <math> \left| u \right> \left< v \right| </math>).
-    !% These projectors are localized in real space -- that is, the function <math>v</math>
-    !% has a finite support around the nucleus. This region where the projectors are localized should
-    !% be small or else the computation time required to operate with them will be very large.
-    !% 
-    !% In practice, this localization is fixed by requiring the definition of the projectors to be
-    !% contained in a sphere of a certain radius. This radius is computed by making sure that the 
-    !% absolute value of the projector functions, at points outside the localization sphere, is 
-    !% below a certain threshold. This threshold is set by <tt>SpeciesProjectorSphereThreshold</tt>.
-    !%End
-    call parse_variable('SpeciesProjectorSphereThreshold', CNST(0.001), ps%projectors_sphere_threshold)
-    if(ps%projectors_sphere_threshold <= M_ZERO) call messages_input_error('SpeciesProjectorSphereThreshold')
 
     ps%has_long_range = .true.
 
@@ -654,8 +654,8 @@ contains
     call spline_end(ps%vl)
     call spline_end(ps%core)
 
-    if(allocated(ps%density)) call spline_end(ps%density)
-    if(allocated(ps%density_der)) call spline_end(ps%density_der)
+    if(associated(ps%density)) call spline_end(ps%density)
+    if(associated(ps%density_der)) call spline_end(ps%density_der)
 
     call logrid_end(ps%g)
 
@@ -665,8 +665,8 @@ contains
     SAFE_DEALLOCATE_P(ps%ur_sq)
     SAFE_DEALLOCATE_P(ps%h)
     SAFE_DEALLOCATE_P(ps%k)
-    SAFE_DEALLOCATE_A(ps%density)
-    SAFE_DEALLOCATE_A(ps%density_der)
+    SAFE_DEALLOCATE_P(ps%density)
+    SAFE_DEALLOCATE_P(ps%density_der)
 
     POP_SUB(ps_end)
   end subroutine ps_end

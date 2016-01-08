@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: pes_flux.F90 14818 2015-11-24 13:40:41Z philipp $
+!! $Id: pes_flux.F90 14996 2016-01-06 23:33:22Z xavier $
 
 #include "global.h"
 
@@ -71,7 +71,7 @@ module pes_flux_m
 
     integer          :: shape                          !< shape of the surface (= cubic/spherical)
     integer          :: nsrfcpnts                      !< total number of surface points
-    integer          :: nsrfcpnts_start, nsrfcpnts_end !< number of surface points on node
+    integer          :: nsrfcpnts_start, nsrfcpnts_end !< for cubic surface: number of surface points on node
     FLOAT, pointer   :: srfcnrml(:,:)                  !< vectors normal to the surface (includes surface element)
     FLOAT, pointer   :: rcoords(:,:)                   !< coordinates of the surface points
     integer, pointer :: srfcpnt(:)                     !< for cubic surface: returns index of the surface points
@@ -116,7 +116,7 @@ contains
     type(block_t)      :: blk
     FLOAT              :: border(MAX_DIM)       ! distance of surface from border
     FLOAT              :: offset(MAX_DIM)       ! offset for border
-    integer            :: sdim, mdim
+    integer            :: stst, stend, kptst, kptend, sdim, mdim
     integer            :: imdim
     integer            :: isp, ikp
     integer            :: il
@@ -126,20 +126,19 @@ contains
     FLOAT, allocatable :: k_dot_aux(:)
     integer            :: nstepsphir, nstepsthetar
 #if defined(HAVE_MPI)
-    integer            :: mpisize, mpirank
+    integer            :: mpirank
 #endif
     integer            :: ll, mm
     integer            :: default_shape
 
     PUSH_SUB(pes_flux_init)
 
+    stst   = st%st_start
+    stend  = st%st_end
+    kptst  = st%d%kpt%start
+    kptend = st%d%kpt%end
     sdim   = st%d%dim
     mdim   = mesh%sb%dim
-
-#if defined(HAVE_MPI)
-    call mpi_comm_size(mpi_comm_world, mpisize, mpi_err)
-    call mpi_comm_rank(mpi_comm_world, mpirank, mpi_err)
-#endif
 
     call messages_experimental("PhotoElectronSpectrum with t-surff")
 
@@ -253,6 +252,8 @@ contains
         call messages_print_var_value(stdout, 'PES_Flux_Lsize', border(1:mdim))
       end if
 
+      call parse_block_end(blk)
+
     else
 
       if(parse_is_defined('PES_Flux_Radius')) then
@@ -306,20 +307,21 @@ contains
     ! -----------------------------------------------------------------
     if(this%shape == M_CUBIC) then
       call pes_flux_getcube(this, mesh, border, offset)
+
+      ! distribute the surface points on nodes,
+      ! since mesh domains may have different numbers of surface points.
+      call pes_flux_distribute(1, this%nsrfcpnts, this%nsrfcpnts_start, this%nsrfcpnts_end, mesh%mpi_grp%comm)
+#if defined(HAVE_MPI)
+      call MPI_Barrier(mpi_world%comm, mpi_err)
+      write(*,*) &
+        'Number of surface points on node ', mesh%mpi_grp%rank, ' : ', this%nsrfcpnts_end - this%nsrfcpnts_start + 1
+      call MPI_Barrier(mpi_world%comm, mpi_err)
+#endif
     else
       call mesh_interpolation_init(this%interp, mesh)
       call pes_flux_getsphere(this, mesh, nstepsthetar, nstepsphir, offset)
     end if
 
-    ! distribute the surface points on nodes,
-    ! since mesh domains may have different numbers of surface points.
-    call pes_flux_distribute(1, this%nsrfcpnts, this%nsrfcpnts_start, this%nsrfcpnts_end)
-#if defined(HAVE_MPI)
-    call MPI_Barrier(mpi_world%comm, mpi_err)
-    write(*,*) &
-      'Number of surface points on node ', mpirank, ' : ', this%nsrfcpnts_end - this%nsrfcpnts_start + 1
-    call MPI_Barrier(mpi_world%comm, mpi_err)
-#endif
     if(mpi_grp_is_root(mpi_world)) then
       write(*,*) 'Info: Number of surface points (total):', this%nsrfcpnts
       do isp = 1, this%nsrfcpnts
@@ -419,8 +421,8 @@ contains
 
     if(this%shape == M_SPHERICAL) then
       ! we split the k-mesh in radial & angular part
-      call pes_flux_distribute(1, this%nk, this%nk_start, this%nk_end)
-      call pes_flux_distribute(1, this%nstepsomegak, this%nstepsomegak_start, this%nstepsomegak_end)
+      call pes_flux_distribute(1, this%nk, this%nk_start, this%nk_end, mpi_world%comm)
+      call pes_flux_distribute(1, this%nstepsomegak, this%nstepsomegak_start, this%nstepsomegak_end, mpi_world%comm)
 
       SAFE_ALLOCATE(this%ylm_k(0:this%lmax, -this%lmax:this%lmax, 1:this%nstepsomegak))
       SAFE_ALLOCATE(this%j_l(0:this%lmax, 1:this%nk))
@@ -464,9 +466,10 @@ contains
 #endif
     else
       ! we do not split the k-mesh
-      call pes_flux_distribute(1, this%nkpnts, this%nkpnts_start, this%nkpnts_end)
+      call pes_flux_distribute(1, this%nkpnts, this%nkpnts_start, this%nkpnts_end, mpi_world%comm)
 #if defined(HAVE_MPI)
       call MPI_Barrier(mpi_world%comm, mpi_err)
+      call MPI_Comm_rank(mpi_world%comm, mpirank, mpi_err)
       write(*,*) &
         'Number of k-points on node ', mpirank, ' : ', this%nkpnts_end - this%nkpnts_start + 1
       call MPI_Barrier(mpi_world%comm, mpi_err)
@@ -527,10 +530,9 @@ contains
     if(this%shape == M_CUBIC) then
       call parse_variable('PES_Flux_TDSteps', 1, this%tdsteps)
     else
-#if defined(HAVE_MPI)
-      this%tdsteps = mpisize
-#else
       this%tdsteps = M_ONE
+#if defined(HAVE_MPI)
+      if(mesh%parallel_in_domains) this%tdsteps = mesh%mpi_grp%size
 #endif
     end if
 
@@ -545,24 +547,24 @@ contains
     if(this%shape == M_CUBIC) &
       call parse_variable('PES_Flux_UseMemory', .true., this%usememory)
 
-    SAFE_ALLOCATE(this%wf(1:st%nst, 1:sdim, 1:st%d%nik, 1:this%nsrfcpnts, 1:this%tdsteps))
+    SAFE_ALLOCATE(this%wf(stst:stend, 1:sdim, kptst:kptend, 1:this%nsrfcpnts, 1:this%tdsteps))
     this%wf = M_z0
 
-    SAFE_ALLOCATE(this%gwf(1:st%nst, 1:sdim, 1:st%d%nik, 1:this%nsrfcpnts, 1:this%tdsteps, 1:mdim))
+    SAFE_ALLOCATE(this%gwf(stst:stend, 1:sdim, kptst:kptend, 1:this%nsrfcpnts, 1:this%tdsteps, 1:mdim))
     this%gwf = M_z0
 
     SAFE_ALLOCATE(this%veca(1:mdim, 1:this%tdsteps))
     this%veca = M_ZERO
 
     if(this%shape == M_SPHERICAL) then
-      SAFE_ALLOCATE(this%spctramp_sph(1:st%nst, 1:sdim, 1:st%d%nik, 1:this%nk, 1:this%nstepsomegak))
+      SAFE_ALLOCATE(this%spctramp_sph(stst:stend, 1:sdim, kptst:kptend, 1:this%nk, 1:this%nstepsomegak))
       this%spctramp_sph = M_z0
 
-      SAFE_ALLOCATE(this%conjgphase_prev_sph(1:this%nk, 1:this%nstepsomegak))
+      SAFE_ALLOCATE(this%conjgphase_prev_sph(this%nk, 1:this%nstepsomegak))
       this%conjgphase_prev_sph = M_z1
 
     else
-      SAFE_ALLOCATE(this%spctramp_cub(1:st%nst, 1:sdim, 1:st%d%nik, 1:this%nkpnts))
+      SAFE_ALLOCATE(this%spctramp_cub(stst:stend, 1:sdim, kptst:kptend, 1:this%nkpnts))
       this%spctramp_cub = M_z0
 
       SAFE_ALLOCATE(this%conjgphase_prev_cub(1:this%nkpnts))
@@ -719,32 +721,18 @@ contains
                     st%occ(ist, ik) * gpsi(ip_local, 1:mdim) ! * mesh%spacing(1:mdim) ?
                 end if
               end do
+              if(mesh%parallel_in_domains) then
+#if defined(HAVE_MPI)
+                call comm_allreduce(mesh%mpi_grp%comm, this%wf(ist, isdim, ik, :, itstep))
+                do imdim = 1, mdim
+                  call comm_allreduce(mesh%mpi_grp%comm, this%gwf(ist, isdim, ik, :, itstep, imdim))
+                end do
+#endif
+              end if
             end if
           end do
         end do
       end do
-
-      if(this%shape == M_SPHERICAL) then 
-
-        if(st%parallel_in_states .or. st%d%kpt%parallel) then
-#if defined(HAVE_MPI)
-          do isp = 1, this%nsrfcpnts
-            call comm_allreduce(st%st_kpt_mpi_grp%comm, this%wf(:,:,:, isp, itstep))
-            do imdim = 1, mdim
-              call comm_allreduce(st%st_kpt_mpi_grp%comm, this%gwf(:,:,:, isp, itstep, imdim))
-            end do
-          end do
-#endif
-        endif
-
-      else
-#if defined(HAVE_MPI)
-        call comm_allreduce(mpi_world%comm, this%wf(:,:,:,:, itstep))
-        do imdim = 1, mdim
-          call comm_allreduce(mpi_world%comm, this%gwf(:,:,:,:, itstep, imdim))
-        end do
-#endif
-      end if
 
       SAFE_DEALLOCATE_A(psi)
       SAFE_DEALLOCATE_A(gpsi)
@@ -771,7 +759,7 @@ contains
     type(states_t),      intent(inout) :: st
     FLOAT,               intent(in)    :: dt
 
-    integer            :: sdim, mdim
+    integer            :: stst, stend, kptst, kptend, sdim, mdim
     integer            :: ist, ik, isdim, imdim
     integer            :: isp, ikp, itstep
     integer            :: idir
@@ -787,17 +775,23 @@ contains
     ! this routine is parallelized over surface points since the number of 
     ! states is in most cases less than the number of surface points
 
+    stst      = st%st_start
+    stend     = st%st_end
+    kptst     = st%d%kpt%start
+    kptend    = st%d%kpt%end
     sdim      = st%d%dim
     mdim      = mesh%sb%dim
+
     ikp_start = this%nkpnts_start
     ikp_end   = this%nkpnts_end
     isp_start = this%nsrfcpnts_start
     isp_end   = this%nsrfcpnts_end
 
+
     SAFE_ALLOCATE(k_dot_aux(1:this%nkpnts))
 
-    SAFE_ALLOCATE(Jk_cub(1:st%nst, 1:sdim, 1:st%d%nik, 1:this%nkpnts))
-    SAFE_ALLOCATE(spctramp_cub(1:st%nst, 1:sdim, 1:st%d%nik, 1:this%nkpnts))
+    SAFE_ALLOCATE(Jk_cub(stst:stend, 1:sdim, kptst:kptend, 1:this%nkpnts))
+    SAFE_ALLOCATE(spctramp_cub(stst:stend, 1:sdim, kptst:kptend, 1:this%nkpnts))
     spctramp_cub = M_z0
 
     if(.not. this%usememory) then
@@ -821,7 +815,7 @@ contains
     this%conjgphase_prev_cub(:) = conjgphase_cub(:, this%tdsteps)
 
     ! integrate over time & surface (on node)
-    do isp = isp_start, isp_end 
+    do isp = isp_start, isp_end
       do idir = 1, mdim
         ! calculate flux only along the surface normal
         if(this%srfcnrml(idir, isp) == M_ZERO) cycle
@@ -836,8 +830,8 @@ contains
           conjgplanewf_cub(:) = exp(-M_zI * k_dot_aux(:)) / (M_TWO * M_PI)**(mdim/M_TWO)
         end if
 
-        do ik = 1, st%d%nik 
-          do ist = 1, st%nst
+        do ik = kptst, kptend
+          do ist = stst, stend
             do isdim = 1, sdim
 
               do itstep = 1, this%tdsteps
@@ -864,7 +858,7 @@ contains
     end do
 
 #if defined(HAVE_MPI)
-    call comm_allreduce(mpi_world%comm, spctramp_cub)
+    call comm_allreduce(mesh%mpi_grp%comm, spctramp_cub)
 #endif
 
     this%spctramp_cub = this%spctramp_cub + spctramp_cub
@@ -885,7 +879,7 @@ contains
     type(states_t),      intent(inout) :: st
     FLOAT,               intent(in)    :: dt
 
-    integer            :: sdim
+    integer            :: stst, stend, kptst, kptend, sdim
     integer            :: ist, ik, isdim, imdim
     integer            :: itstep, lmax
     integer            :: ll, mm 
@@ -897,6 +891,7 @@ contains
     integer            :: ikk, ikk_start, ikk_end
     integer            :: iomk
     CMPLX, allocatable :: conjgphase_sph(:,:,:)
+    CMPLX, allocatable :: phase_act(:,:), phase_prev(:,:)
     FLOAT              :: vec
     integer            :: tdsteps_start, tdsteps_end
 
@@ -904,43 +899,60 @@ contains
 
     ! this routine is parallelized over time steps
 
-    call pes_flux_distribute(1, this%tdsteps, tdsteps_start, tdsteps_end)
+    call pes_flux_distribute(1, this%tdsteps, tdsteps_start, tdsteps_end, mesh%mpi_grp%comm)
 
-    sdim = st%d%dim
+    stst   = st%st_start
+    stend  = st%st_end
+    kptst  = st%d%kpt%start
+    kptend = st%d%kpt%end
+    sdim   = st%d%dim
 
     lmax       = this%lmax
     ikk_start  = this%nk_start
     ikk_end    = this%nk_end
 
-    SAFE_ALLOCATE(conjgphase_sph(1:this%nk, 1:this%nstepsomegak, 0:this%tdsteps))
+    SAFE_ALLOCATE(conjgphase_sph(1:this%nk, 1:this%nstepsomegak, tdsteps_start:tdsteps_end))
     conjgphase_sph = M_z0
 
+    SAFE_ALLOCATE(phase_act(1:this%nk, 1:this%nstepsomegak))
+    SAFE_ALLOCATE(phase_prev(ikk_start:ikk_end, 1:this%nstepsomegak))
+
     ! calculate Volkov phase using the previous time step
-    conjgphase_sph(:,:, 0) = this%conjgphase_prev_sph(:,:)
-    do ikk = ikk_start, ikk_end
-      do iomk = 1, this%nstepsomegak
-        do itstep = 1, this%tdsteps
+    do itstep = 1, this%tdsteps
+      if(itstep == 1) then
+        phase_prev(ikk_start:ikk_end,:) = this%conjgphase_prev_sph(ikk_start:ikk_end,:)
+      else
+        phase_prev(ikk_start:ikk_end, :) = phase_act(ikk_start:ikk_end, :)
+      end if
+
+      phase_act = M_z0
+
+      do ikk = ikk_start, ikk_end
+        do iomk = 1, this%nstepsomegak
           vec = sum((this%kcoords_sph(1:3, ikk, iomk) - this%veca(1:3, itstep) / P_c)**2)
-          conjgphase_sph(ikk, iomk, itstep) = conjgphase_sph(ikk, iomk, itstep - 1) * &
-            exp(M_zI * vec * dt * this%tdstepsinterval / M_TWO)
+          phase_act(ikk, iomk) = phase_prev(ikk, iomk) * exp(M_zI * vec * dt * this%tdstepsinterval / M_TWO)
         end do
       end do
-    end do
 #if defined(HAVE_MPI)
-    call comm_allreduce(mpi_world%comm, conjgphase_sph)
+      call comm_allreduce(mpi_world%comm, phase_act)
 #endif
-    this%conjgphase_prev_sph(:,:) = conjgphase_sph(:,:, this%tdsteps)
+      if(itstep >= tdsteps_start .and. itstep <= tdsteps_end) conjgphase_sph(:,:, itstep) = phase_act(:,:)
+      if(itstep == this%tdsteps) this%conjgphase_prev_sph(:, :) = phase_act(:, :)
+    end do
+
+    SAFE_DEALLOCATE_A(phase_act)
+    SAFE_DEALLOCATE_A(phase_prev)
 
     ! surface integral S_lm (for time range)
     SAFE_ALLOCATE(sigma1(1:3, 1:this%nsrfcpnts))
     SAFE_ALLOCATE(sigma2(1:3, 1:this%nsrfcpnts))
     SAFE_ALLOCATE(sigma3(1:3))
 
-    SAFE_ALLOCATE(integ1_s(1:st%nst, 1:sdim, 1:st%d%nik, 0:lmax, -lmax:lmax, 1:3, tdsteps_start:tdsteps_end))
-    SAFE_ALLOCATE(integ2_s(1:st%nst, 1:sdim, 1:st%d%nik, 0:lmax, -lmax:lmax, tdsteps_start:tdsteps_end))
+    SAFE_ALLOCATE(integ1_s(stst:stend, 1:sdim, kptst:kptend, 0:lmax, -lmax:lmax, 1:3, tdsteps_start:tdsteps_end))
+    SAFE_ALLOCATE(integ2_s(stst:stend, 1:sdim, kptst:kptend, 0:lmax, -lmax:lmax, tdsteps_start:tdsteps_end))
 
-    do ik = 1, st%d%nik
-      do ist = 1, st%nst
+    do ik = kptst, kptend
+      do ist = stst, stend
         do isdim = 1, sdim
 
           do itstep = tdsteps_start, tdsteps_end
@@ -982,11 +994,11 @@ contains
     SAFE_ALLOCATE(integ12_t(1:this%nk, 1:this%nstepsomegak, 1:3))
     SAFE_ALLOCATE(integ22_t(1:this%nk, 1:this%nstepsomegak))
 
-    SAFE_ALLOCATE(spctramp_sph(1:st%nst, 1:sdim, 1:st%d%nik, 1:this%nk, 1:this%nstepsomegak))
+    SAFE_ALLOCATE(spctramp_sph(stst:stend, 1:sdim, kptst:kptend, 1:this%nk, 1:this%nstepsomegak))
     spctramp_sph = M_z0
 
-    do ik = 1, st%d%nik
-      do ist = 1, st%nst
+    do ik = kptst, kptend
+      do ist = stst, stend
         do isdim = 1, sdim
   
           do itstep = tdsteps_start, tdsteps_end
@@ -1042,7 +1054,7 @@ contains
 
     ! sum over time
 #if defined(HAVE_MPI)
-    call comm_allreduce(mpi_world%comm, spctramp_sph)
+    if(mesh%parallel_in_domains) call comm_allreduce(mesh%mpi_grp%comm, spctramp_sph)
 #endif
     this%spctramp_sph = this%spctramp_sph + spctramp_sph
 
@@ -1070,7 +1082,7 @@ contains
 
     mdim = mesh%sb%dim
 
-    call pes_flux_distribute(1, mesh%np_global, ip_start, ip_end)
+    call pes_flux_distribute(1, mesh%np_global, ip_start, ip_end, mpi_world%comm)
 
     SAFE_ALLOCATE(which_surface(1:mesh%np_global))
     which_surface = 0
@@ -1228,19 +1240,22 @@ contains
     type(states_t),      intent(in)    :: st
     FLOAT,               intent(in)    :: dt
 
-    integer            :: sdim, mdim
+    integer            :: stst, stend, kptst, kptend, sdim, mdim
     integer            :: ist, ik, isdim
-    integer            :: ikp, iomk
+    integer            :: ikp, iomk, ikp_save, iomk_save
     integer            :: ikk, ith, iph, iphi
-    FLOAT              :: phik, thetak, kk, kact
+    FLOAT              :: phik, thetak, kact
 
-    integer            :: iunit
+    integer            :: iunitone, iunittwo
     FLOAT, allocatable :: spctrout_cub(:), spctrout_sph(:,:)
-    FLOAT              :: spctroutsave
     FLOAT              :: weight, spctrsum
 
     PUSH_SUB(pes_flux_output)
 
+    stst   = st%st_start
+    stend  = st%st_end
+    kptst  = st%d%kpt%start
+    kptend = st%d%kpt%end
     sdim   = st%d%dim
     mdim   = mesh%sb%dim
 
@@ -1253,8 +1268,8 @@ contains
     end if
 
     ! calculate the total spectrum
-    do ik = 1, st%d%nik
-      do ist = 1, st%nst
+    do ik = kptst, kptend
+      do ist = stst, stend
         do isdim = 1, sdim
           if(this%shape == M_SPHERICAL) then
             spctrout_sph(1:this%nk, 1:this%nstepsomegak) = spctrout_sph(1:this%nk, 1:this%nstepsomegak) + &
@@ -1267,89 +1282,24 @@ contains
       end do
     end do
 
-    if(mpi_grp_is_root(mpi_world)) then
-      iunit = io_open('td.general/PES_flux.distribution.out', action='write', position='rewind')
-      write(iunit, '(a29)') '# k, theta, phi, distribution'
-
+    if(st%parallel_in_states .or. st%d%kpt%parallel) then
+#if defined(HAVE_MPI)
       if(this%shape == M_SPHERICAL) then
-        do ikk = 1, this%nk 
-          kact = ikk * this%dk
-          iomk = 0
-          do ith = 0, this%nstepsthetak
-            thetak = ith * this%dthetak
-            do iph = 0, this%nstepsphik - 1
-              iomk = iomk + 1
-              if(iph == 0) spctroutsave = spctrout_sph(ikk, iomk)
-              phik = iph * M_TWO * M_PI / this%nstepsphik
-              write(iunit,'(5(1x,e18.10E3))') kact, thetak, phik, spctrout_sph(ikk, iomk)
-
-              ! just repeat the result for output
-              if(iph == (this%nstepsphik - 1)) &
-                write(iunit,'(5(1x,e18.10E3))') kact, thetak, M_TWO * M_PI, spctroutsave
-
-              ! just repeat the result for output
-              if(ith == 0 .or. ith == this%nstepsthetak) then
-                do iphi = 1, this%nstepsphik
-                  phik = iphi * M_TWO * M_PI / this%nstepsphik
-                  write(iunit,'(5(1x,e18.10E3))') kact, thetak, phik, spctrout_sph(ikk, iomk)
-                end do
-                exit
-              end if
-            end do
-            write(iunit, '(1x)', advance='yes')
-          end do
-          write(iunit, '(1x)', advance='yes')
-        end do
-
-      else ! this%shape == M_CUBIC
-        select case(mdim)
-        case(1)
-          ikp = 0
-          do ikk = -this%nk, this%nk
-            if(ikk == M_ZERO) cycle
-            ikp = ikp + 1
-            write(iunit, '(5(1x,e18.10E3))') this%kcoords_cub(1, ikp), spctrout_cub(ikp)
-          end do
-
-        case default
-          thetak = M_PI / M_TWO
-          ikp    = 0
-          do ikk = 1, this%nk
-            kk = ikk * this%dk
-            do ith = 0, this%nstepsthetak
-              if(mdim == 3) thetak = ith * this%dthetak
-              do iph = 0, this%nstepsphik - 1
-                ikp = ikp + 1
-                if(iph == 0) spctroutsave = spctrout_cub(ikp)
-                phik = iph * M_TWO * M_PI / this%nstepsphik
-                write(iunit,'(5(1x,e18.10E3))') kk, thetak, phik, spctrout_cub(ikp)
-     
-                ! just repeat the result for output
-                if(iph == (this%nstepsphik - 1)) &
-                  write(iunit,'(5(1x,e18.10E3))') kk, thetak, M_TWO * M_PI, spctroutsave
-                 
-                ! just repeat the result for output
-                if(thetak == M_ZERO .or. thetak == M_PI) then
-                  do iphi = 1, this%nstepsphik
-                    phik = iphi * M_TWO * M_PI / this%nstepsphik
-                    write(iunit,'(5(1x,e18.10E3))') kk, thetak, phik, spctrout_cub(ikp)
-                  end do
-                  exit
-                end if
-              end do
-              if(this%nstepsphik > 0) write(iunit, '(1x)', advance='yes')
-            end do
-            if(this%nstepsphik == 0) write(iunit, '(1x)', advance='yes')
-          end do
-        end select
+        call comm_allreduce(st%st_kpt_mpi_grp%comm, spctrout_sph)
+      else
+        call comm_allreduce(st%st_kpt_mpi_grp%comm, spctrout_cub)
       end if
-      call io_close(iunit)
+#endif
+    end if
 
-      iunit = io_open('td.general/PES_flux.power.sum', action='write', position='rewind')
-      write(iunit, '(a29)') '# E,  distribution'
+    if(mpi_grp_is_root(mpi_world)) then
+      iunittwo = io_open('td.general/PES_flux.distribution.out', action='write', position='rewind')
+      iunitone = io_open('td.general/'//'PES_flux.power.sum', action='write', position='rewind')
+      write(iunitone, '(a19)') '# E, total spectrum'
 
       if(this%shape == M_SPHERICAL) then
-        do ikk = 1, this%nk
+        write(iunittwo, '(a29)') '# k, theta, phi, distribution'
+        do ikk = 1, this%nk 
           kact = ikk * this%dk
           iomk = 0
           spctrsum = M_ZERO
@@ -1357,7 +1307,7 @@ contains
           do ith = 0, this%nstepsthetak
             thetak = ith * this%dthetak
 
-            if(ith == 0 .or. ith == this%nstepsthetak) then
+            if(ith == 0 .or. ith == this%nstepsphik) then
               weight = (M_ONE - cos(this%dthetak/M_TWO)) * M_TWO * M_PI
             else
               weight = abs(cos(thetak - this%dthetak/M_TWO) - cos(thetak + this%dthetak/M_TWO)) &
@@ -1366,17 +1316,112 @@ contains
 
             do iph = 0, this%nstepsphik - 1
               iomk = iomk + 1
-              spctrsum = spctrsum + spctrout_sph(ikk, iomk) * weight
+              spctrsum = spctrsum + spctrout_sph(ikk, iomk) * weight 
+              phik = iph * M_TWO * M_PI / this%nstepsphik
+              if(iph == 0) iomk_save = iomk
+              write(iunittwo,'(5(1x,e18.10E3))') kact, thetak, phik, spctrout_sph(ikk, iomk)
 
-              if(thetak == M_ZERO .or. thetak == M_PI) exit
+              ! just repeat the result for output
+              if(iph == (this%nstepsphik - 1)) &
+                write(iunittwo,'(5(1x,e18.10E3))') kact, thetak, M_TWO * M_PI, spctrout_sph(ikk, iomk_save)
 
+              ! just repeat the result for output and exit
+              if(ith == 0 .or. ith == this%nstepsthetak) then
+                do iphi = 1, this%nstepsphik
+                  phik = iphi * M_TWO * M_PI / this%nstepsphik
+                  write(iunittwo,'(5(1x,e18.10E3))') kact, thetak, phik, spctrout_sph(ikk, iomk)
+                end do
+                exit
+              end if
             end do
+
+            write(iunittwo, '(1x)', advance='yes')
+          end do
+          write(iunitone, '(2(1x,e18.10E3))') kact**M_TWO / M_TWO, spctrsum * kact
+        end do
+
+      else ! this%shape == M_CUBIC
+        select case(mdim)
+        case(1)
+          write(iunittwo, '(a17)') '# k, distribution'
+          do ikp = 1, this%nkpnts
+            write(iunittwo, '(5(1x,e18.10E3))') this%kcoords_cub(1, ikp), spctrout_cub(ikp)
           end do
 
-          write(iunit,'(2(1x,e18.10E3))') kact**M_TWO / M_TWO, spctrsum * kact
-        end do
+          do ikp = this%nk + 1, this%nkpnts
+            kact = this%kcoords_cub(1, ikp)
+            write(iunitone, '(2(1x,e18.10E3))') kact**M_TWO / M_TWO, &
+              (spctrout_cub(ikp) + spctrout_cub(this%nkpnts + 1 - ikp)) / M_TWO * kact
+          end do
+
+        case(2)
+          write(iunittwo, '(a29)') '# k, phi, distribution'
+          ikp = 0
+          do ikk = 1, this%nk
+            kact = ikk * this%dk
+            
+            spctrsum = M_ZERO
+            do iph = 0, this%nstepsphik - 1
+              ikp = ikp + 1
+              if(iph == 0) ikp_save = ikp
+              spctrsum = spctrsum + spctrout_cub(ikp) * this%nstepsphik / M_TWO / M_PI
+              phik = iph * M_TWO * M_PI / this%nstepsphik
+              write(iunittwo,'(5(1x,e18.10E3))') kact, phik, spctrout_cub(ikp)
+            end do
+            ! just repeat the result for output
+            write(iunittwo,'(5(1x,e18.10E3))') kact, M_TWO * M_PI, spctrout_cub(ikp_save)
+            write(iunittwo,'(1x)', advance = 'yes')
+            write(iunitone, '(2(1x,e18.10E3))') kact**M_TWO / M_TWO, spctrsum * kact
+          end do
+
+        case(3)
+          write(iunittwo, '(a29)') '# k, theta, phi, distribution'
+          ikp    = 0
+          do ikk = 1, this%nk
+            kact = ikk * this%dk
+            spctrsum = M_ZERO
+
+            do ith = 0, this%nstepsthetak
+              thetak = ith * M_PI / this%nstepsthetak 
+
+              if(ith == 0 .or. ith == this%nstepsthetak) then
+                weight = (M_ONE - cos(M_PI / this%nstepsthetak / M_TWO)) * M_TWO * M_PI
+              else
+                weight = abs(cos(thetak - M_PI / this%nstepsthetak / M_TWO) - cos(thetak + M_PI / this%nstepsthetak / M_TWO)) &
+                  * M_TWO * M_PI / this%nstepsphik
+              end if
+
+              do iph = 0, this%nstepsphik - 1
+                ikp = ikp + 1
+                spctrsum = spctrsum + spctrout_cub(ikp) * weight
+
+                phik = iph * M_TWO * M_PI / this%nstepsphik
+                if(iph == 0) ikp_save = ikp
+                write(iunittwo,'(5(1x,e18.10E3))') kact, thetak, phik, spctrout_cub(ikp)
+
+                ! just repeat the result for output
+                if(iph == (this%nstepsphik - 1)) &
+                  write(iunittwo,'(5(1x,e18.10E3))') kact, thetak, M_TWO * M_PI, spctrout_cub(ikp_save)
+
+                ! just repeat the result for output and exit
+                if(thetak == M_ZERO .or. thetak == M_PI) then
+                  do iphi = 1, this%nstepsphik
+                    phik = iphi * M_TWO * M_PI / this%nstepsphik
+                    write(iunittwo,'(5(1x,e18.10E3))') kact, thetak, phik, spctrout_cub(ikp)
+                  end do
+                  exit
+                end if
+              end do
+
+              write(iunittwo, '(1x)', advance='yes')
+            end do
+            write(iunitone, '(2(1x,e18.10E3))') kact**M_TWO / M_TWO, spctrsum * kact
+          end do
+        end select
       end if
-      call io_close(iunit)
+
+      call io_close(iunittwo)
+      call io_close(iunitone)
     end if
 
     SAFE_DEALLOCATE_A(spctrout_cub)
@@ -1393,32 +1438,64 @@ contains
     type(states_t),   intent(in)  :: st
     integer,          intent(out) :: ierr
 
-    integer :: err, mdim, sdim, rstdim
+    integer          :: stst, stend, kptst, kptend, sdim, mdim
+    integer          :: ist, ik, isdim
+    integer          :: err
+    character(len=8) :: filename
 
     PUSH_SUB(pes_flux_dump)
 
-    mdim   = mesh%sb%dim
+    stst   = st%st_start
+    stend  = st%st_end
+    kptst  = st%d%kpt%start
+    kptend = st%d%kpt%end
     sdim   = st%d%dim
-    rstdim = st%nst * sdim * st%d%nik
+    mdim   = mesh%sb%dim
 
     if(restart_skip(restart)) then
       POP_SUB(pes_flux_dump)
       return
     end if
 
-    if(in_debug_mode) then
+    if(debug%info) then
       message(1) = "Debug: Writing pes_flux restart."
       call messages_info(1)
     end if
 
-!    call zrestart_write_binary(restart, 'pesflux1', rstdim * this%nkpnts, this%spctramp, err)
-!    call zrestart_write_binary(restart, 'pesflux2', rstdim * this%nsrfcpnts * this%tdsteps, this%wf, err)
-!    call zrestart_write_binary(restart, 'pesflux3', rstdim * this%nsrfcpnts * this%tdsteps * mdim, this%gwf, err)
-!    call zrestart_write_binary(restart, 'pesflux4', (this%tdsteps + 1) * this%nkpnts, this%conjgphase, err)
+    if(mpi_grp_is_root(mesh%mpi_grp)) then
+      do ik = kptst, kptend
+        do ist = stst, stend
+          do isdim = 1, sdim
+            write(filename, '(i2.2, a, i2.2, a, i2.2)') ik, '.', ist, '.', isdim
+  
+            if(this%shape == M_SPHERICAL) then
+              call io_binary_write(trim(restart_dir(restart))//"/pesflux1."//trim(filename)//".obf", &
+                this%nk * this%nstepsomegak, this%spctramp_sph(ist, isdim, ik, :, :), err)
+            else
+              call io_binary_write(trim(restart_dir(restart))//"/pesflux1."//trim(filename)//".obf", &
+                this%nkpnts, this%spctramp_cub(ist, isdim, ik, :), err)
+            end if
+
+            call io_binary_write(trim(restart_dir(restart))//"/pesflux2."//trim(filename)//".obf", &
+              this%nsrfcpnts * this%tdsteps, this%wf(ist, isdim, ik, :, :), err)
+            call io_binary_write(trim(restart_dir(restart))//"/pesflux3."//trim(filename)//".obf", &
+              this%nsrfcpnts * this%tdsteps * mdim, this%gwf(ist, isdim, ik, :, :, :), err)
+          end do
+        end do
+      end do
+    end if
+
+    if(this%shape == M_SPHERICAL) then
+      call zrestart_write_binary(restart, 'pesflux4', this%nk * this%nstepsomegak, this%conjgphase_prev_sph, err)
+    else
+      call zrestart_write_binary(restart, 'pesflux4', this%nkpnts, this%conjgphase_prev_cub, err)
+    end if
+
+    call drestart_write_binary(restart, 'pesflux5', this%tdsteps * mdim, this%veca, err) 
 
     if(err /= 0) ierr = ierr + 1
 
-    if(in_debug_mode) then
+    if(debug%info) then
       message(1) = "Debug: Writing pes_flux restart done."
       call messages_info(1)
     end if
@@ -1434,13 +1511,19 @@ contains
     type(states_t),      intent(in)    :: st
     integer,             intent(out)   :: ierr
 
-    integer :: err, mdim, sdim, rstdim
+    integer          :: stst, stend, kptst, kptend, sdim, mdim
+    integer          :: ist, ik, isdim
+    integer          :: err
+    character(len=8) :: filename
 
     PUSH_SUB(pes_flux_load)
 
-    mdim   = mesh%sb%dim
+    stst   = st%st_start
+    stend  = st%st_end
+    kptst  = st%d%kpt%start
+    kptend = st%d%kpt%end
     sdim   = st%d%dim
-    rstdim = st%nst * sdim * st%d%nik
+    mdim   = mesh%sb%dim
 
     if(restart_skip(restart)) then
       ierr = -1
@@ -1448,19 +1531,43 @@ contains
       return
     end if
 
-    if(in_debug_mode) then
+    if(debug%info) then
       message(1) = "Debug: Reading pes_flux restart."
       call messages_info(1)
     end if
 
-!    call zrestart_read_binary(restart, 'pesflux1', rstdim * this%nkpnts, this%spctramp, err)
-!    call zrestart_read_binary(restart, 'pesflux2', rstdim * this%nsrfcpnts * this%tdsteps, this%wf, err)
-!    call zrestart_read_binary(restart, 'pesflux3', rstdim * this%nsrfcpnts * this%tdsteps * mdim, this%gwf, err)
-!    call zrestart_read_binary(restart, 'pesflux4', (this%tdsteps + 1) * this%nkpnts, this%conjgphase, err)
+    do ik = kptst, kptend
+      do ist = stst, stend
+        do isdim = 1, sdim
+          write(filename, '(i2.2, a, i2.2, a, i2.2)') ik, '.', ist, '.', isdim
+  
+          if(this%shape == M_SPHERICAL) then
+            call io_binary_read(trim(restart_dir(restart))//"/pesflux1."//trim(filename)//".obf", &
+              this%nk * this%nstepsomegak, this%spctramp_sph(ist, isdim, ik, :, :), err)
+          else
+            call io_binary_read(trim(restart_dir(restart))//"/pesflux1."//trim(filename)//".obf", &
+              this%nkpnts, this%spctramp_cub(ist, isdim, ik, :), err)
+          end if
+
+          call io_binary_read(trim(restart_dir(restart))//"/pesflux2."//trim(filename)//".obf", &
+            this%nsrfcpnts * this%tdsteps, this%wf(ist, isdim, ik, :, :), err)
+          call io_binary_read(trim(restart_dir(restart))//"/pesflux3."//trim(filename)//".obf", &
+            this%nsrfcpnts * this%tdsteps * mdim, this%gwf(ist, isdim, ik, :, :, :), err)
+        end do
+      end do
+    end do
+
+    if(this%shape == M_SPHERICAL) then
+      call zrestart_read_binary(restart, 'pesflux4', this%nk * this%nstepsomegak, this%conjgphase_prev_sph, err)
+    else
+      call zrestart_read_binary(restart, 'pesflux4', this%nkpnts, this%conjgphase_prev_cub, err)
+    end if
+
+    call drestart_read_binary(restart, 'pesflux5', this%tdsteps * mdim, this%veca, err) 
 
     if(err /= 0) ierr = ierr + 1
    
-    if(in_debug_mode) then
+    if(debug%info) then
       message(1) = "Debug: Reading pes_flux restart done."
       call messages_info(1)
     end if
@@ -1469,11 +1576,12 @@ contains
   end subroutine pes_flux_load
 
   ! ---------------------------------------------------------
-  subroutine pes_flux_distribute(istart_global, iend_global, istart, iend)
+  subroutine pes_flux_distribute(istart_global, iend_global, istart, iend, comm)
     integer,          intent(in)    :: istart_global
     integer,          intent(in)    :: iend_global
     integer,          intent(inout) :: istart
     integer,          intent(inout) :: iend
+    integer,          intent(in)    :: comm
 
 #if defined(HAVE_MPI)
     integer, allocatable :: dimrank(:)
@@ -1484,8 +1592,8 @@ contains
     PUSH_SUB(pes_flux_distribute)
 
 #if defined(HAVE_MPI)
-    call mpi_comm_size(mpi_comm_world, mpisize, mpi_err)
-    call mpi_comm_rank(mpi_comm_world, mpirank, mpi_err)
+    call mpi_comm_size(comm, mpisize, mpi_err)
+    call mpi_comm_rank(comm, mpirank, mpi_err)
 
     SAFE_ALLOCATE(dimrank(0:mpisize-1))
 

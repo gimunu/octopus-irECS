@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: phonons_lr.F90 14541 2015-09-06 15:13:42Z xavier $
+!! $Id: phonons_lr.F90 14901 2015-12-27 02:30:23Z xavier $
 
 #include "global.h"
 
@@ -209,9 +209,9 @@ contains
 
     !the  <phi0 | v2 | phi0> term
     if(states_are_real(st)) then
-      call dionic_pert_matrix_elements_2(sys%gr, sys%geo, hm, 1, st, st%ddontusepsi(:, :, :, 1), vib, CNST(-1.0), vib%dyn_matrix)
+      call dionic_pert_matrix_elements_2(sys%gr, sys%geo, hm, 1, st, vib, CNST(-1.0), vib%dyn_matrix)
     else
-      call zionic_pert_matrix_elements_2(sys%gr, sys%geo, hm, 1, st, st%zdontusepsi(:, :, :, 1), vib, CNST(-1.0), vib%dyn_matrix)
+      call zionic_pert_matrix_elements_2(sys%gr, sys%geo, hm, 1, st, vib, CNST(-1.0), vib%dyn_matrix)
     end if
 
     call pert_init(ionic_pert, PERTURBATION_IONIC, gr, geo)

@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: grid.F90 14321 2015-06-23 02:36:56Z dstrubbe $
+!! $Id: grid.F90 14976 2016-01-05 14:27:54Z xavier $
 
 #include "global.h"
 
@@ -232,13 +232,8 @@ contains
 
     PUSH_SUB(grid_init_stage_2)
 
-    if(multicomm_strategy_is_parallel(mc, P_STRATEGY_DOMAINS)) then
-      call mpi_grp_init(grp, mc%group_comm(P_STRATEGY_DOMAINS))
-      call mesh_init_stage_3(gr%mesh, gr%stencil, grp)
-    else
-      call mpi_grp_init(grp, mc%group_comm(P_STRATEGY_DOMAINS))
-      call mesh_init_stage_3(gr%mesh, mpi_grp=grp)
-    end if
+    call mpi_grp_init(grp, mc%group_comm(P_STRATEGY_DOMAINS))
+    call mesh_init_stage_3(gr%mesh, gr%stencil, grp)
 
     call nl_operator_global_init()
     if(gr%have_fine_mesh) then
@@ -264,11 +259,7 @@ contains
       
       call derivatives_init(gr%fine%der, gr%mesh%sb, gr%cv%method /= CURV_METHOD_UNIFORM)
       
-      if(gr%mesh%parallel_in_domains) then
-        call mesh_init_stage_3(gr%fine%mesh, gr%stencil, gr%mesh%mpi_grp)
-      else
-        call mesh_init_stage_3(gr%fine%mesh)
-      end if
+      call mesh_init_stage_3(gr%fine%mesh, gr%stencil, gr%mesh%mpi_grp)
       
       call multigrid_get_transfer_tables(gr%fine%tt, gr%fine%mesh, gr%mesh)
       
@@ -343,7 +334,7 @@ contains
     PUSH_SUB(grid_write_info)
 
     if(.not.mpi_grp_is_root(mpi_world)) then
-      if(in_debug_mode) call messages_debug_newlines(6)
+      if(debug%info) call messages_debug_newlines(6)
       POP_SUB(grid_write_info)
       return
     end if
@@ -425,11 +416,7 @@ contains
 
     call grid_init_stage_1(grout, geo)
 
-    if(grin%mesh%parallel_in_domains) then
-      call mesh_init_stage_3(grout%mesh, grout%stencil, grin%mesh%mpi_grp)
-    else
-      call mesh_init_stage_3(grout%mesh)
-    end if
+    call mesh_init_stage_3(grout%mesh, grout%stencil, grin%mesh%mpi_grp)
 
     call derivatives_build(grout%der, grout%mesh)
 

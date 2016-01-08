@@ -17,7 +17,7 @@
 ## Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 ## 02110-1301, USA.
 ##
-## $Id: Makefile.am 14809 2015-11-21 15:26:00Z askhl $
+## $Id: Makefile.am 14877 2015-12-16 20:10:38Z philipp $
 
 noinst_LIBRARIES = libhamiltonian.a
 
@@ -47,9 +47,7 @@ libhamiltonian_a_SOURCES =         \
 	libvdwxc.F90               \
 	vdw_ts.F90                 \
 	vdw_ts_low.c
-#       boundaries.F90             \
-#       boundaries_abs.F90         \
-#       boundaries_ecs.F90
+#       boundary_op.F90
 
 noinst_HEADERS =                      \
 	lasers_inc.F90                \
@@ -94,6 +92,4 @@ ion_interaction.o : ion_interaction.F90
 hirshfeld.o : hirshfeld.F90 species_pot.o
 libvdwxc.o : libvdwxc.F90
 vdw_ts.o : vdw_ts.F90 hirshfeld.o
-#boundaries_abs.o : boundaries_abs.F90 
-#boundaries_ecs.o : boundaries_ecs.F90 
-#boundaries.o : boundaries.F90 boundaries_ecs.o boundaries_abs.o
+#boundary_op.o : boundary_op.F90

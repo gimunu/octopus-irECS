@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: par_vec.F90 14110 2015-05-27 23:13:23Z dstrubbe $
+!! $Id: par_vec.F90 14976 2016-01-05 14:27:54Z xavier $
 
 #include "global.h"
  
@@ -570,7 +570,7 @@ contains
     SAFE_DEALLOCATE_A(size_v)
 
     ! lxyz is not set for hypercube.
-    if(in_debug_mode .and. .not. idx%is_hypercube) then
+    if(debug%info .and. .not. idx%is_hypercube) then
       ! Write numbers and coordinates of each process` ghost points
       ! to a single file (like in mesh_partition_init) called
       ! debug/mesh_partition/ghost_points.###.

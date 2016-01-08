@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: index.F90 14624 2015-10-03 13:39:53Z xavier $
+!! $Id: index.F90 14976 2016-01-05 14:27:54Z xavier $
 
 #include "global.h"
 
@@ -381,7 +381,7 @@ contains
     PUSH_SUB(index_subset_indices)
 
     ! In debug mode, check for valid indices in from, to first.
-    if(in_debug_mode) then
+    if(debug%info) then
       if(.not.index_valid(idx, from).or..not.index_valid(idx, to)) then
         message(1) = 'Failed assertion:'
         message(2) = 'mesh.mesh_subset_indices has been passed points outside the box:'

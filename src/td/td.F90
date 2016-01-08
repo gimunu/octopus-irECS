@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: td.F90 14758 2015-11-08 16:37:13Z xavier $
+!! $Id: td.F90 14976 2016-01-05 14:27:54Z xavier $
 
 #include "global.h"
 
@@ -909,7 +909,7 @@ contains
       return
     end if
 
-    if (in_debug_mode) then
+    if (debug%info) then
       message(1) = "Debug: Writing td restart."
       call messages_info(1)
     end if
@@ -930,7 +930,7 @@ contains
       call gauge_field_dump(restart, hm%ep%gfield, ierr)
     end if
 
-    if (in_debug_mode) then
+    if (debug%info) then
       message(1) = "Debug: Writing td restart done."
       call messages_info(1)
     end if
@@ -959,7 +959,7 @@ contains
       return
     end if
 
-    if (in_debug_mode) then
+    if (debug%info) then
       message(1) = "Debug: Reading td restart."
       call messages_info(1)
     end if
@@ -992,7 +992,7 @@ contains
       end if
     end if
 
-    if (in_debug_mode) then
+    if (debug%info) then
       message(1) = "Debug: Reading td restart done."
       call messages_info(1)
     end if

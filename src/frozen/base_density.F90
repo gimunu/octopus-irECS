@@ -131,7 +131,9 @@ module base_density_m
 
   interface base_density_gets
     module procedure base_density_gets_config
-    module procedure base_density_gets_name
+    module procedure base_density_gets_type
+    module procedure base_density_gets_density_1d
+    module procedure base_density_gets_density_2d
   end interface base_density_gets
 
   interface base_density_get
@@ -171,19 +173,16 @@ contains
 #undef HASH_INCLUDE_BODY
 
   ! ---------------------------------------------------------
-  subroutine base_density_new(this, that)
-    type(base_density_t),  target, intent(inout) :: this
-    type(base_density_t), pointer                :: that
+  subroutine base_density__new__(this)
+    type(base_density_t), pointer :: this
 
-    PUSH_SUB(base_density_new)
+    PUSH_SUB(base_density__new__)
 
-    nullify(that)
-    SAFE_ALLOCATE(that)
-    that%prnt => this
-    call base_density_list_push(this%list, that)
+    nullify(this)
+    SAFE_ALLOCATE(this)
 
-    POP_SUB(base_density_new)
-  end subroutine base_density_new
+    POP_SUB(base_density__new__)
+  end subroutine base_density__new__
 
   ! ---------------------------------------------------------
   subroutine base_density__del__(this)
@@ -191,11 +190,28 @@ contains
 
     PUSH_SUB(base_density__del__)
 
-    SAFE_DEALLOCATE_P(this)
+    if(associated(this))then
+      SAFE_DEALLOCATE_P(this)
+    end if
     nullify(this)
 
     POP_SUB(base_density__del__)
   end subroutine base_density__del__
+
+  ! ---------------------------------------------------------
+  subroutine base_density_new(this, that)
+    type(base_density_t),  target, intent(inout) :: this
+    type(base_density_t), pointer                :: that
+
+    PUSH_SUB(base_density_new)
+
+    nullify(that)
+    call base_density__new__(that)
+    that%prnt => this
+    call base_density_list_push(this%list, that)
+
+    POP_SUB(base_density_new)
+  end subroutine base_density_new
 
   ! ---------------------------------------------------------
   subroutine base_density_del(this)
@@ -219,11 +235,12 @@ contains
     type(base_density_t), target, intent(out) :: this
     type(json_object_t),  target, intent(in)  :: config
 
-    integer :: ierr
-    logical :: allc
+    type(json_object_t), pointer :: cnfg
+    integer                      :: ierr
 
     PUSH_SUB(base_density__init__type)
 
+    nullify(cnfg)
     this%config => config
     call json_get(this%config, "nspin", this%nspin, ierr)
     if(ierr/=JSON_OK) this%nspin = default_nspin
@@ -232,15 +249,18 @@ contains
     SAFE_ALLOCATE(this%charge(1:this%nspin))
     call json_get(this%config, "charge", this%charge, ierr)
     if(ierr/=JSON_OK) this%charge = 0.0_wp
-    call json_get(this%config, "allocate", allc, ierr)
-    if(ierr/=JSON_OK) allc = .true.
+    call json_get(this%config, "storage", cnfg, ierr)
+    ASSERT(ierr==JSON_OK)
+    call json_set(cnfg, "fine", .true.)
+    call json_set(cnfg, "dimensions", this%nspin)
     if(this%nspin>1)then
       SAFE_ALLOCATE(this%total)
-      call storage_init(this%total, allocate=allc)
+      call storage_init(this%total, cnfg)
     else
       this%total => this%data
     end if
-    call storage_init(this%data, this%nspin, allocate=allc)
+    call storage_init(this%data, cnfg)
+    nullify(cnfg)
     call config_dict_init(this%dict)
     call base_density_hash_init(this%hash)
     call base_density_list_init(this%list)
@@ -313,8 +333,8 @@ contains
     ASSERT(associated(this%config))
     ASSERT(.not.associated(this%sim))
     this%sim => sim
-    if(this%nspin>1) call storage_start(this%total, this%sim, fine=.true.)
-    call storage_start(this%data, this%sim, fine=.true.)
+    if(this%nspin>1) call storage_start(this%total, this%sim, ndim=1)
+    call storage_start(this%data, this%sim)
 
     POP_SUB(base_density__start__)
   end subroutine base_density__start__
@@ -361,6 +381,9 @@ contains
         call storage_integrate(this%data, ispn, intg)
         ASSERT(.not.(intg<0.0_wp))
         if(intg>0.0_wp)call storage_mlt(this%data, ispn, this%charge(ispn)/intg)
+      else
+        this%charge(ispn) = 0.0_wp
+        call storage_reset(this%data, ispn)
       end if
     end do
 
@@ -401,7 +424,7 @@ contains
     end do
     call base_density_end(iter)
     nullify(subs)
-    call base_density__update__(this)
+    if(associated(this%sim)) call base_density__update__(this)
 
     POP_SUB(base_density_update)
   end subroutine base_density_update
@@ -465,13 +488,21 @@ contains
     type(base_density_t), intent(inout) :: this
     type(base_density_t), intent(in)    :: that
 
+    integer :: ispn
+
     PUSH_SUB(base_density__acc__)
 
     ASSERT(associated(this%config))
+    ASSERT(associated(that%config))
     ASSERT(associated(this%sim))
+    ASSERT(associated(that%sim))
     ASSERT(this%nspin==that%nspin)
-    this%charge(:) = this%charge(:) + that%charge(:)
-    call storage_add(this%data, that%data)
+    do ispn = 1, this%nspin
+      if(that%charge(ispn)>0.0_wp)then
+        this%charge(ispn) = this%charge(ispn) + that%charge(ispn)
+        call storage_add(this%data, that%data, ispn)
+      end if
+    end do
     call base_density__update__(this)
 
     POP_SUB(base_density__acc__)
@@ -516,7 +547,7 @@ contains
   end subroutine base_density_gets_config
 
   ! ---------------------------------------------------------
-  subroutine base_density_gets_name(this, name, that)
+  subroutine base_density_gets_type(this, name, that)
     type(base_density_t),  intent(in) :: this
     character(len=*),      intent(in) :: name
     type(base_density_t), pointer     :: that
@@ -524,15 +555,51 @@ contains
     type(json_object_t), pointer :: config
     integer                      :: ierr
 
-    PUSH_SUB(base_density_gets_name)
+    PUSH_SUB(base_density_gets_type)
 
     nullify(that)
     ASSERT(associated(this%config))
     call config_dict_get(this%dict, trim(adjustl(name)), config, ierr)
     if(ierr==CONFIG_DICT_OK) call base_density_gets(this, config, that)
 
-    POP_SUB(base_density_gets_name)
-  end subroutine base_density_gets_name
+    POP_SUB(base_density_gets_type)
+  end subroutine base_density_gets_type
+
+  ! ---------------------------------------------------------
+  subroutine base_density_gets_density_1d(this, name, that, total)
+    type(base_density_t),         intent(in) :: this
+    character(len=*),             intent(in) :: name
+    real(kind=wp), dimension(:), pointer     :: that
+    logical,            optional, intent(in) :: total
+
+    type(base_density_t), pointer :: subs
+
+    PUSH_SUB(base_density_gets_density_1d)
+
+    nullify(that, subs)
+    call base_density_gets(this, name, subs)
+    if(associated(subs)) call base_density_get(subs, that, total)
+
+    POP_SUB(base_density_gets_density_1d)
+  end subroutine base_density_gets_density_1d
+
+  ! ---------------------------------------------------------
+  subroutine base_density_gets_density_2d(this, name, that, total)
+    type(base_density_t),           intent(in) :: this
+    character(len=*),               intent(in) :: name
+    real(kind=wp), dimension(:,:), pointer     :: that
+    logical,              optional, intent(in) :: total
+
+    type(base_density_t), pointer :: subs
+
+    PUSH_SUB(base_density_gets_density_2d)
+
+    nullify(that, subs)
+    call base_density_gets(this, name, subs)
+    if(associated(subs)) call base_density_get(subs, that, total)
+
+    POP_SUB(base_density_gets_density_2d)
+  end subroutine base_density_gets_density_2d
 
   ! ---------------------------------------------------------
   subroutine base_density_set_charge(this, charge, spin)
@@ -662,7 +729,7 @@ contains
 
     logical :: itotal
 
-    PUSH_SUB(density_get_base_density_2d)
+    PUSH_SUB(base_density_get_density_2d)
 
     nullify(that)
     itotal = .false.

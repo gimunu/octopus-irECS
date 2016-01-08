@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: states_parallel.F90 14793 2015-11-19 06:06:52Z xavier $
+!! $Id: states_parallel.F90 14884 2015-12-23 20:01:32Z xavier $
 
 #include "global.h"
 
@@ -80,7 +80,7 @@ contains
     end if
 
     if (st%parallel_in_states) then
-      blocksize(2) = maxval(st%st_num)
+      blocksize(2) = maxval(st%dist%num)
     else
       blocksize(2) = st%nst
     end if

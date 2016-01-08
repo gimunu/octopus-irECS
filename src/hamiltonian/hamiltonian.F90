@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: hamiltonian.F90 14788 2015-11-19 02:39:50Z xavier $
+!! $Id: hamiltonian.F90 15001 2016-01-07 06:56:31Z xavier $
 
 #include "global.h"
 
@@ -110,10 +110,10 @@ module hamiltonian_m
     hamiltonian_update,              &
     hamiltonian_get_time,            &
     hamiltonian_apply_packed,        &
-    dexchange_operator,              &
-    zexchange_operator,              &
-    dscdm_exchange_operator,              &
-    zscdm_exchange_operator,              &
+    dexchange_operator_single,       &
+    zexchange_operator_single,       &
+    dscdm_exchange_operator,         &
+    zscdm_exchange_operator,         &
     dhamiltonian_phase,              &
     zhamiltonian_phase,              &
     zhamiltonian_dervexternal,       &
@@ -224,7 +224,7 @@ module hamiltonian_m
     RDMFT                 = 7
 
   type(profile_t), save :: prof_hamiltonian, prof_kinetic_start, prof_kinetic_finish
-  type(profile_t), save :: prof_exx, prof_exx_scdm
+  type(profile_t), save :: prof_exx_scdm, prof_exx
 
 contains
 
@@ -302,7 +302,7 @@ contains
     if(present(subsys_hm))then
       ! Set Subsystems Hamiltonian pointer.
       ASSERT(.not.hm%cmplxscl%space)
-      hm%subsys_hm=>subsys_hm
+      hm%subsys_hm => subsys_hm
     end if
 
     ! allocate potentials and density of the cores
@@ -564,7 +564,7 @@ contains
       !%End
       call parse_variable('ABWidth', CNST(0.4), hm%ab_width, units_inp%length)
 
-      if(hm%ab == 1) then
+      if(hm%ab == IMAGINARY_ABSORBING) then
         !%Variable ABHeight
         !%Type float
         !%Default -0.2 a.u.
@@ -871,8 +871,6 @@ contains
 
     integer :: ispin, ip, idir, iatom, ilaser
     type(profile_t), save :: prof, prof_phases
-    type(base_hamiltonian_t), pointer :: subsys_tnadd
-    FLOAT, dimension(:,:),    pointer :: potential
     FLOAT :: aa(1:MAX_DIM)
     FLOAT, allocatable :: vp(:,:)
 
@@ -888,7 +886,13 @@ contains
     call hamiltonian_base_clear(this%hm_base)
 
     ! the xc, hartree and external potentials
-    call hamiltonian_base_allocate(this%hm_base, mesh, FIELD_POTENTIAL, this%cmplxscl%space)
+    call hamiltonian_base_allocate(this%hm_base, mesh, FIELD_POTENTIAL, &
+      complex_potential = this%cmplxscl%space .or. this%ab == IMAGINARY_ABSORBING)
+
+    if(this%d%nspin > 2 .and. this%ab == IMAGINARY_ABSORBING) then
+      call messages_not_implemented('AbsorbingBoundaries = sin2 for spinors')
+    end if
+    
     do ispin = 1, this%d%nspin
       if(ispin <= 2) then
         forall (ip = 1:mesh%np) this%hm_base%potential(ip, ispin) = this%vhxc(ip, ispin) + this%ep%vpsl(ip)
@@ -901,28 +905,23 @@ contains
         end if
 
         if(this%cmplxscl%space) then
-          forall (ip = 1:mesh%np) this%hm_base%Impotential(ip, ispin) = this%Imvhxc(ip, ispin) +  this%ep%Imvpsl(ip)
+          forall (ip = 1:mesh%np)
+            this%hm_base%Impotential(ip, ispin) = &
+              this%hm_base%Impotential(ip, ispin) + this%Imvhxc(ip, ispin) +  this%ep%Imvpsl(ip)
+          end forall
         end if
       else
         forall (ip = 1:mesh%np) this%hm_base%potential(ip, ispin) = this%vhxc(ip, ispin)
       end if
+
+      if(this%ab == IMAGINARY_ABSORBING) then
+        forall (ip = 1:mesh%np)
+          this%hm_base%Impotential(ip, ispin) = this%hm_base%Impotential(ip, ispin) + this%ab_pot(ip)
+        end forall
+      end if
+
     end do
 
-    ! Add subsystem kinetic non-additive term
-    nullify(subsys_tnadd, potential)
-    if(associated(this%subsys_hm))then
-      call base_hamiltonian_get(this%subsys_hm, "tnadd", subsys_tnadd)
-      ASSERT(associated(subsys_tnadd))
-      call base_hamiltonian_get(subsys_tnadd, potential)
-      ASSERT(associated(potential))
-      do ispin = 1, this%d%nspin
-        forall (ip = 1:mesh%np) 
-          this%hm_base%potential(ip,ispin) = this%hm_base%potential(ip,ispin) + potential(ip,ispin)
-        end forall
-      end do
-      nullify(subsys_tnadd, potential)
-    end if
- 
     ! the lasers
     if (present(time)) then
 
@@ -1101,7 +1100,7 @@ contains
     if (this%pcm%run_pcm) then
      !> Generates the real-space PCM potential due to nuclei which do not change
      !! during the SCF calculation.
-     call v_nuclei_cav(this%pcm%v_n, geo, this%pcm%tess, this%pcm%n_tesserae)
+     call pcm_v_nuclei_cav(this%pcm%v_n, geo, this%pcm%tess, this%pcm%n_tesserae)
      call pcm_charges(this%pcm%q_n, this%pcm%qtot_n, this%pcm%v_n, this%pcm%matrix, this%pcm%n_tesserae)
      call pcm_pot_rs( this%pcm%v_n_rs, this%pcm%q_n, this%pcm%tess, this%pcm%n_tesserae, gr%mesh, this%pcm%gaussian_width )
     end if
@@ -1127,10 +1126,8 @@ contains
     if(mesh%use_curvilinear) apply = .false.
     if(hamiltonian_base_has_magnetic(this%hm_base)) apply = .false.
     if(this%rashba_coupling**2 > M_ZERO) apply = .false.
-    if(this%ab  ==  IMAGINARY_ABSORBING) apply = .false.
-    if(this%theory_level == HARTREE .or. this%theory_level == HARTREE_FOCK .or. this%theory_level == RDMFT) apply = .false.
-    if(iand(this%xc_family, XC_FAMILY_MGGA + XC_FAMILY_HYB_MGGA) /= 0)  apply = .false.
     if(this%ep%non_local .and. .not. this%hm_base%apply_projector_matrices) apply = .false.
+    if(iand(this%xc_family, XC_FAMILY_MGGA + XC_FAMILY_HYB_MGGA) /= 0)  apply = .false. 
 
   end function hamiltonian_apply_packed
 
@@ -1249,7 +1246,7 @@ contains
       return
     end if
 
-    if (in_debug_mode) then
+    if (debug%info) then
       message(1) = "Debug: Writing Vhxc restart."
       call messages_info(1)
     end if
@@ -1323,7 +1320,7 @@ contains
 
     call restart_close(restart, iunit)
 
-    if (in_debug_mode) then
+    if (debug%info) then
       message(1) = "Debug: Writing Vhxc restart done."
       call messages_info(1)
     end if
@@ -1353,7 +1350,7 @@ contains
       return
     end if
 
-    if (in_debug_mode) then
+    if (debug%info) then
       message(1) = "Debug: Reading Vhxc restart."
       call messages_info(1)
     end if
@@ -1410,7 +1407,7 @@ contains
       SAFE_DEALLOCATE_A(zv)
     end if
 
-    if (in_debug_mode) then
+    if (debug%info) then
       message(1) = "Debug: Reading Vhxc restart done."
       call messages_info(1)
     end if

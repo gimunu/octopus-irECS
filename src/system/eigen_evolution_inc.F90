@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: eigen_evolution_inc.F90 14541 2015-09-06 15:13:42Z xavier $
+!! $Id: eigen_evolution_inc.F90 14976 2016-01-05 14:27:54Z xavier $
 
 ! ---------------------------------------------------------
 subroutine X(eigensolver_evolution) (gr, st, hm, tol, niter, converged, ik, diff, tau)
@@ -30,7 +30,7 @@ subroutine X(eigensolver_evolution) (gr, st, hm, tol, niter, converged, ik, diff
   FLOAT,                       intent(in)    :: tau
 
   integer :: ist, iter, maxiter, conv, matvec, i, j
-  R_TYPE, allocatable :: hpsi(:, :), m(:, :), c(:, :), phi(:, :, :)
+  R_TYPE, allocatable :: hpsi(:, :), c(:, :), psi(:, :)
   FLOAT, allocatable :: eig(:)
   type(exponential_t) :: te
 
@@ -41,11 +41,10 @@ subroutine X(eigensolver_evolution) (gr, st, hm, tol, niter, converged, ik, diff
 
   call exponential_init(te)
 
+  SAFE_ALLOCATE(psi(1:gr%mesh%np_part, 1:st%d%dim))
   SAFE_ALLOCATE(hpsi(1:gr%mesh%np_part, 1:st%d%dim))
-  SAFE_ALLOCATE(m(1:st%nst, 1:st%nst))
   SAFE_ALLOCATE(c(1:st%nst, 1:st%nst))
   SAFE_ALLOCATE(eig(1:st%nst))
-  SAFE_ALLOCATE(phi(1:gr%mesh%np_part, 1:st%d%dim, 1:st%nst))
 
   ! Warning: it seems that the algorithm is improved if some extra states are added -- states
   ! whose convergence should not be checked.
@@ -54,44 +53,39 @@ subroutine X(eigensolver_evolution) (gr, st, hm, tol, niter, converged, ik, diff
   do iter = 1, maxiter
 
     do ist = conv + 1, st%nst
-      call exponentiate(st%X(dontusepsi)(:, :, ist, ik), j)
+      call states_get_state(st, gr%mesh, ist, ik, psi)
+      !TODO: convert this opperation to batched versions 
+      call exponentiate(psi, j)
+      call states_set_state(st, gr%mesh, ist, ik, psi)
       matvec = matvec + j
     end do
 
     ! This is the orthonormalization suggested by Aichinger and Krotschek
     ! [Comp. Mat. Science 34, 188 (2005)]
-    do i = 1, st%nst
-      do j = i, st%nst
-        m(i, j) = X(mf_dotp)(gr%mesh, st%d%dim, st%X(dontusepsi)(:, :, i, ik), st%X(dontusepsi)(:, :, j, ik) )
-      end do
-    end do
-    c = m
+    call X(states_calc_overlap)(st, gr%mesh, ik, c)
+
     call lalg_eigensolve(st%nst, c, eig)
+
     do i = 1, st%nst
-      c(:, i) = c(:, i) / sqrt(eig(i))
-    end do
-    
-    call lalg_gemm(gr%mesh%np_part * st%d%dim, st%nst, st%nst, R_TOTYPE(M_ONE), &
-         st%X(dontusepsi)(:, :, :, ik), c, R_TOTYPE(M_ZERO), phi)
-    do i = 1, st%nst
-      st%X(dontusepsi)(1:gr%mesh%np, :, i, ik) = phi(1:gr%mesh%np, :, st%nst -i + 1)
+      c(1:st%nst, i) = c(1:st%nst, i)/sqrt(eig(i))
     end do
 
+    call states_rotate(gr%mesh, st, c, ik)
+    
     ! Get the eigenvalues and the residues.
     do ist = conv + 1, st%nst
-      call X(hamiltonian_apply)(hm, gr%der, st%X(dontusepsi)(:, :, ist, ik), hpsi, ist, ik)
-      st%eigenval(ist, ik) = real(X(mf_dotp)(gr%mesh, st%d%dim, st%X(dontusepsi)(:, :, ist, ik), hpsi), REAL_PRECISION)
-      diff(ist) = X(states_residue)(gr%mesh, st%d%dim, hpsi, st%eigenval(ist, ik), st%X(dontusepsi)(:, :, ist, ik))
+      call states_get_state(st, gr%mesh, ist, ik, psi)
+      !TODO: convert these opperations to batched versions 
+      call X(hamiltonian_apply)(hm, gr%der, psi, hpsi, ist, ik)
+      st%eigenval(ist, ik) = real(X(mf_dotp)(gr%mesh, st%d%dim, psi, hpsi), REAL_PRECISION)
+      diff(ist) = X(states_residue)(gr%mesh, st%d%dim, hpsi, st%eigenval(ist, ik), psi)
 
-      if(in_debug_mode) then
+      if(debug%info) then
         write(message(1), '(a,i4,a,i4,a,i4,a,es12.6)') 'Debug: Evolution Eigensolver - ik', ik, &
           ' ist ', ist, ' iter ', iter, ' res ', diff(ist)
         call messages_info(1)
       end if
     end do
-
-    ! Reordering.... (maybe this is unnecessary since the orthonormalization already orders them...)
-    if(st%nst > 1) call sort(st%eigenval(1:st%nst, ik), st%X(dontusepsi)(:, :, 1:st%nst, ik))
 
     ! And check for convergence. Note that they must be converged *in order*, so that they can be frozen.
     do ist = conv + 1, st%nst
@@ -104,11 +98,11 @@ subroutine X(eigensolver_evolution) (gr, st, hm, tol, niter, converged, ik, diff
 
   niter = matvec
   call exponential_end(te)
+
+  SAFE_DEALLOCATE_A(psi)
   SAFE_DEALLOCATE_A(hpsi)
-  SAFE_DEALLOCATE_A(m)
   SAFE_DEALLOCATE_A(c)
   SAFE_DEALLOCATE_A(eig)
-  SAFE_DEALLOCATE_A(phi)
 
   POP_SUB(X(eigensolver_evolution))
 contains
@@ -117,6 +111,7 @@ contains
   subroutine exponentiate(psi, order)
     R_TYPE, target, intent(inout) :: psi(:, :)
     integer,        intent(out)   :: order
+    
     CMPLX,          pointer       :: zpsi(:, :)
 
     PUSH_SUB(X(eigensolver_evolution).exponentiate)

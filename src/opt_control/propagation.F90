@@ -15,11 +15,12 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: propagation.F90 14786 2015-11-18 21:59:57Z acastro $
+!! $Id: propagation.F90 14976 2016-01-05 14:27:54Z xavier $
 
 #include "global.h"
 
 module propagation_m
+  use batch_m
   use batch_ops_m
   use controlfunction_m
   use density_m
@@ -1157,7 +1158,7 @@ contains
       return
     end if
 
-    if (in_debug_mode) then
+    if (debug%info) then
       message(1) = "Debug: Writing OCT propagation states restart."
       call messages_info(1)
     end if
@@ -1176,7 +1177,7 @@ contains
       end if
     end do
 
-    if (in_debug_mode) then
+    if (debug%info) then
       message(1) = "Debug: Writing OCT propagation states restart done."
       call messages_info(1)
     end if
@@ -1207,7 +1208,7 @@ contains
       return
     end if
 
-    if (in_debug_mode) then
+    if (debug%info) then
       message(1) = "Debug: Reading OCT propagation states restart."
       call messages_info(1)
     end if
@@ -1226,7 +1227,7 @@ contains
       end if
     end do
 
-    if (in_debug_mode) then
+    if (debug%info) then
       message(1) = "Debug: Reading OCT propagation states restart done."
       call messages_info(1)
     end if

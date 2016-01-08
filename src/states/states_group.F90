@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: states_group.F90 14721 2015-10-31 05:24:30Z xavier $
+!! $Id: states_group.F90 14995 2016-01-06 23:22:41Z xavier $
 
 #include "global.h"
 
@@ -23,6 +23,7 @@ module states_group_m
   use batch_m
   use batch_ops_m
   use global_m
+  use loct_pointer_m
   use messages_m
   use mpi_m
   use profiling_m
@@ -33,7 +34,8 @@ module states_group_m
 
   public ::                           &
     states_group_t,                   &
-    states_group_null
+    states_group_null,                &
+    states_group_copy
 
   type states_group_t
     type(batch_t), pointer   :: psib(:, :)            !< A set of wave-functions blocks
@@ -53,7 +55,7 @@ contains
 
   ! ---------------------------------------------------------
   subroutine states_group_null(this)
-    type(states_group_t), intent(inout) :: this
+    type(states_group_t), intent(out)   :: this
 
     PUSH_SUB(states_group_null)
 
@@ -68,6 +70,51 @@ contains
     POP_SUB(states_group_null)
   end subroutine states_group_null
 
+  !---------------------------------------------------------
+
+  subroutine states_group_copy(group_in, group_out)
+    type(states_group_t), intent(in)    :: group_in
+    type(states_group_t), intent(out)   :: group_out
+
+    integer :: qn_start, qn_end, ib, iqn
+    
+    PUSH_SUB(states_group_copy)
+
+    call states_group_null(group_out)
+
+    
+    group_out%nblocks           = group_in%nblocks
+    group_out%block_start       = group_in%block_start
+    group_out%block_end         = group_in%block_end
+    group_out%block_initialized = group_in%block_initialized
+
+    if(group_out%block_initialized) then
+
+      ASSERT(associated(group_in%psib))
+
+      qn_start = lbound(group_in%psib, dim = 2)
+      qn_end   = ubound(group_in%psib, dim = 2)
+
+      SAFE_ALLOCATE(group_out%psib(1:group_out%nblocks, qn_start:qn_end))
+
+      do iqn = qn_start, qn_end
+        do ib = group_out%block_start, group_out%block_end
+          call batch_copy(group_in%psib(ib, iqn), group_out%psib(ib, iqn), copy_data = .true.)
+        end do
+      end do
+      
+      call loct_pointer_copy(group_out%iblock, group_in%iblock)
+      call loct_pointer_copy(group_out%block_range, group_in%block_range)
+      call loct_pointer_copy(group_out%block_size, group_in%block_size)
+      call loct_pointer_copy(group_out%block_is_local, group_in%block_is_local)
+      call loct_allocatable_copy(group_out%block_node, group_in%block_node)
+      call loct_allocatable_copy(group_out%rma_win, group_in%rma_win)
+    
+    end if
+
+    POP_SUB(states_group_copy)
+  end subroutine states_group_copy
+  
 end module states_group_m
 
 

@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: em_resp_calc_inc.F90 14669 2015-10-12 14:51:08Z irina $
+!! $Id: em_resp_calc_inc.F90 14917 2015-12-29 17:22:40Z xavier $
 
 
 ! ---------------------------------------------------------
@@ -29,7 +29,7 @@ subroutine X(lr_calc_elf)(st, gr, lr, lr_m)
 
   integer :: ip, idir, is, ist, idim, ik
 
-  R_TYPE, allocatable :: gpsi(:,:), gdl_psi(:,:), gdl_psi_m(:,:)
+  R_TYPE, allocatable :: psi(:, :), gpsi(:,:), gdl_psi(:,:), gdl_psi_m(:,:)
   FLOAT,  allocatable :: rho(:), grho(:,:)
   R_TYPE, allocatable :: dl_rho(:), gdl_rho(:,:)
   FLOAT,  allocatable :: elf(:,:), de(:,:), current(:, :, :)
@@ -43,6 +43,7 @@ subroutine X(lr_calc_elf)(st, gr, lr, lr_m)
 
   ASSERT(.false.)
 
+  SAFE_ALLOCATE(psi(1:gr%mesh%np_part, 1:gr%mesh%sb%dim))
   SAFE_ALLOCATE(   gpsi(1:gr%mesh%np, 1:gr%mesh%sb%dim))
   SAFE_ALLOCATE(gdl_psi(1:gr%mesh%np, 1:gr%mesh%sb%dim))
 
@@ -100,20 +101,23 @@ subroutine X(lr_calc_elf)(st, gr, lr, lr_m)
     !be done directly, but it is less precise numerically
     do ik = is, st%d%nik, st%d%nspin
       do ist = 1, st%nst
-        ik_weight = st%d%kweights(ik) * st%occ(ist, ik) / spin_factor
+
+        call states_get_state(st, gr%mesh, ist, is, psi)
+        
+        ik_weight = st%d%kweights(ik)*st%occ(ist, ik)/spin_factor
 
         do idim = 1, st%d%dim
 
-          call X(derivatives_grad)(gr%der, st%X(dontusepsi)   (:, idim, ist, is), gpsi)
+          call X(derivatives_grad)(gr%der, psi(:, idim), gpsi)
           call X(derivatives_grad)(gr%der, lr%X(dl_psi)(:, idim, ist, is), gdl_psi)
 
           ! sum over states to obtain the spin-density
-          rho(1:gr%mesh%np) = rho(1:gr%mesh%np) + ik_weight * abs(st%X(dontusepsi)(1:gr%mesh%np, idim, ist, is))**2
+          rho(1:gr%mesh%np) = rho(1:gr%mesh%np) + ik_weight * abs(psi(1:gr%mesh%np, idim))**2
 
           !the gradient of the density
           do idir = 1, gr%mesh%sb%dim
             grho(1:gr%mesh%np, idir) = grho(1:gr%mesh%np, idir) + &
-                 ik_weight*M_TWO*R_REAL(R_CONJ(st%X(dontusepsi)(1:gr%mesh%np, idim, ist, is))*gpsi(1:gr%mesh%np, idir))
+                 ik_weight*M_TWO*R_REAL(R_CONJ(psi(1:gr%mesh%np, idim))*gpsi(1:gr%mesh%np, idir))
           end do
 
           !the variation of the density and its gradient
@@ -123,28 +127,28 @@ subroutine X(lr_calc_elf)(st, gr, lr, lr_m)
             call X(derivatives_grad)(gr%der, lr_m%X(dl_psi)(:, idim, ist, is), gdl_psi_m)
 
             dl_rho(1:gr%mesh%np) = dl_rho(1:gr%mesh%np) + ik_weight*( &
-                 R_CONJ(st%X(dontusepsi)(1:gr%mesh%np, idim, ist, is))*lr%X(dl_psi)(1:gr%mesh%np, idim, ist, is) + &
-                 st%X(dontusepsi)(1:gr%mesh%np, idim, ist, is)*R_CONJ(lr_m%X(dl_psi)(1:gr%mesh%np, idim, ist, is)))
+              R_CONJ(psi(1:gr%mesh%np, idim))*lr%X(dl_psi)(1:gr%mesh%np, idim, ist, is) + &
+              psi(1:gr%mesh%np, idim)*R_CONJ(lr_m%X(dl_psi)(1:gr%mesh%np, idim, ist, is)))
 
             do idir = 1, gr%mesh%sb%dim
 
-              gdl_rho(1:gr%mesh%np, idir) = gdl_rho(1:gr%mesh%np, idir) + ik_weight * ( &
-                   R_CONJ(st%X(dontusepsi)(1:gr%mesh%np, idim, ist, is)) * gdl_psi(1:gr%mesh%np, idir) +      &
-                   R_CONJ(gpsi(1:gr%mesh%np, idir))* lr%X(dl_psi)(1:gr%mesh%np, idim, ist, is)  +      &
-                   st%X(dontusepsi)(1:gr%mesh%np, idim, ist, is) * R_CONJ(gdl_psi_m(1:gr%mesh%np, idir)) +      &
-                   gpsi(1:gr%mesh%np, idir) * R_CONJ(lr_m%X(dl_psi)(1:gr%mesh%np, idim, ist, is))  )
+              gdl_rho(1:gr%mesh%np, idir) = gdl_rho(1:gr%mesh%np, idir) + ik_weight*( &
+                   R_CONJ(psi(1:gr%mesh%np, idim))*gdl_psi(1:gr%mesh%np, idir) + &
+                   R_CONJ(gpsi(1:gr%mesh%np, idir))* lr%X(dl_psi)(1:gr%mesh%np, idim, ist, is) + &
+                   psi(1:gr%mesh%np, idim)*R_CONJ(gdl_psi_m(1:gr%mesh%np, idir)) + &
+                   gpsi(1:gr%mesh%np, idir)*R_CONJ(lr_m%X(dl_psi)(1:gr%mesh%np, idim, ist, is)))
 
             end do
 
           else
             
             dl_rho(1:gr%mesh%np) = dl_rho(1:gr%mesh%np) + ik_weight*M_TWO* &
-                 R_REAL(R_CONJ(st%X(dontusepsi)(1:gr%mesh%np, idim, ist, is))*lr%X(dl_psi)(1:gr%mesh%np, idim, ist, is))
+                 R_REAL(R_CONJ(psi(1:gr%mesh%np, idim))*lr%X(dl_psi)(1:gr%mesh%np, idim, ist, is))
 
             do idir = 1, gr%mesh%sb%dim
               gdl_rho(1:gr%mesh%np, idir) = gdl_rho(1:gr%mesh%np, idir) + ik_weight*M_TWO*(&
-                   R_CONJ(st%X(dontusepsi)(1:gr%mesh%np, idim, ist, is))*gdl_psi(1:gr%mesh%np, idir) + &
-                   gpsi(1:gr%mesh%np, idir)*R_CONJ(lr%X(dl_psi)(1:gr%mesh%np, idim, ist, is)))
+                R_CONJ(psi(1:gr%mesh%np, idim))*gdl_psi(1:gr%mesh%np, idir) + &
+                gpsi(1:gr%mesh%np, idir)*R_CONJ(lr%X(dl_psi)(1:gr%mesh%np, idim, ist, is)))
             end do
 
           end if
@@ -159,10 +163,14 @@ subroutine X(lr_calc_elf)(st, gr, lr, lr_m)
     !this is the only term that is different for the dynamical case
     do ik = is, st%d%nik, st%d%nspin
       do ist = 1, st%nst
-        ik_weight = st%d%kweights(ik) * st%occ(ist, ik) / spin_factor
+
+        call states_get_state(st, gr%mesh, ist, is, psi)
+        
+        ik_weight = st%d%kweights(ik)*st%occ(ist, ik)/spin_factor
+
         do idim = 1, st%d%dim
 
-          call X(derivatives_grad)(gr%der, st%X(dontusepsi)   (:, idim, ist, is), gpsi)
+          call X(derivatives_grad)(gr%der, psi(:, idim), gpsi)
           call X(derivatives_grad)(gr%der, lr%X(dl_psi)(:, idim, ist, is), gdl_psi)
 
           if(present(lr_m)) then 
@@ -173,7 +181,7 @@ subroutine X(lr_calc_elf)(st, gr, lr, lr_m)
               lr%X(dl_de)(ip, is) = lr%X(dl_de)(ip, is) + &
                 dl_rho(ip) * ik_weight * sum(R_ABS(gpsi(ip, 1:gr%mesh%sb%dim))**2) + &
                 rho(ip) * ik_weight * &
-                sum(R_CONJ(gpsi(ip, 1:gr%mesh%sb%dim)) * gdl_psi(ip, 1:gr%mesh%sb%dim) + &
+                sum(R_CONJ(gpsi(ip, 1:gr%mesh%sb%dim))*gdl_psi(ip, 1:gr%mesh%sb%dim) + &
                 gpsi(ip, 1:gr%mesh%sb%dim) * R_CONJ(gdl_psi_m(ip, 1:gr%mesh%sb%dim)))
             end do
 
@@ -229,6 +237,7 @@ subroutine X(lr_calc_elf)(st, gr, lr, lr_m)
 
   end do
 
+  SAFE_DEALLOCATE_A(psi)
   SAFE_DEALLOCATE_A(current)
   SAFE_DEALLOCATE_A(gpsi)
   SAFE_DEALLOCATE_A(gdl_psi)
@@ -326,7 +335,7 @@ end subroutine X(calc_polarizability_periodic)
 !> alpha_ij(w) = - sum(m occ) [<psi_m(0)|r_i|psi_mj(1)(w)> + <psi_mj(1)(-w)|r_i|psi_m(0)>]
 !! minus sign is from electronic charge -e
 subroutine X(calc_polarizability_finite)(sys, hm, lr, nsigma, perturbation, zpol, doalldirs, ndir)
-  type(system_t),         intent(inout) :: sys
+  type(system_t), target, intent(inout) :: sys
   type(hamiltonian_t),    intent(inout) :: hm
   type(lr_t),             intent(inout) :: lr(:,:)
   integer,                intent(in)    :: nsigma
@@ -335,10 +344,15 @@ subroutine X(calc_polarizability_finite)(sys, hm, lr, nsigma, perturbation, zpol
   logical, optional,      intent(in)    :: doalldirs
   integer, optional,      intent(in)    :: ndir
 
-  integer :: dir1, dir2, ndir_, startdir
-
+  type(states_t), pointer :: st
+  integer :: dir1, dir2, ndir_, startdir, np
+  R_TYPE, pointer :: psi(:, :, :, :)
+  
   PUSH_SUB(X(calc_polarizability_finite))
 
+  st => sys%st
+  np = sys%gr%mesh%np
+  
   ndir_ = sys%gr%sb%dim
   if(present(ndir)) ndir_ = ndir
 
@@ -347,22 +361,26 @@ subroutine X(calc_polarizability_finite)(sys, hm, lr, nsigma, perturbation, zpol
     if(doalldirs) startdir = 1
   end if
 
+  SAFE_ALLOCATE(psi(1:np, 1:st%d%dim, st%st_start:st%st_end, st%d%kpt%start:st%d%kpt%end))
+
+  call states_get_state(sys%st, sys%gr%mesh, psi)
+  
   do dir1 = startdir, ndir_
     do dir2 = 1, sys%gr%sb%dim
       call pert_setup_dir(perturbation, dir1)
-      zpol(dir1, dir2) = -X(pert_expectation_value)(perturbation, sys%gr, sys%geo, hm, &
-        sys%st, sys%st%X(dontusepsi), lr(dir2, 1)%X(dl_psi))
+      zpol(dir1, dir2) = -X(pert_expectation_value)(perturbation, sys%gr, sys%geo, hm, sys%st, psi, lr(dir2, 1)%X(dl_psi))
 
       if(nsigma == 1) then
         zpol(dir1, dir2) = zpol(dir1, dir2) + R_CONJ(zpol(dir1, dir2))
       else
         zpol(dir1, dir2) = zpol(dir1, dir2) &
-          - X(pert_expectation_value)(perturbation, sys%gr, sys%geo, hm, &
-          sys%st, lr(dir2, 2)%X(dl_psi), sys%st%X(dontusepsi))
+          - X(pert_expectation_value)(perturbation, sys%gr, sys%geo, hm, sys%st, lr(dir2, 2)%X(dl_psi), psi)
       end if
     end do
   end do
 
+  SAFE_DEALLOCATE_P(psi)
+  
   POP_SUB(X(calc_polarizability_finite))
 
 end subroutine X(calc_polarizability_finite)
@@ -370,45 +388,55 @@ end subroutine X(calc_polarizability_finite)
 
 ! ---------------------------------------------------------
 subroutine X(lr_calc_susceptibility)(sys, hm, lr, nsigma, perturbation, chi_para, chi_dia)
-  type(system_t),         intent(inout) :: sys
+  type(system_t), target, intent(inout) :: sys
   type(hamiltonian_t),    intent(inout) :: hm
   type(lr_t),             intent(inout) :: lr(:,:)
   integer,                intent(in)    :: nsigma
   type(pert_t),           intent(inout) :: perturbation
   CMPLX,                  intent(out)   :: chi_para(:,:), chi_dia(:,:)
 
-  integer :: dir1, dir2
+  type(states_t), pointer :: st
+  integer :: dir1, dir2, np
   R_TYPE  :: trace
-
+  R_TYPE, pointer :: psi(:, :, :, :)
+  
   PUSH_SUB(X(lr_calc_susceptibility))
 
+  st => sys%st
+  np = sys%gr%mesh%np
+  
   chi_para = M_ZERO
   chi_dia  = M_ZERO
+
+  SAFE_ALLOCATE(psi(1:np, 1:st%d%dim, st%st_start:st%st_end, st%d%kpt%start:st%d%kpt%end))
+
+  call states_get_state(sys%st, sys%gr%mesh, psi)
 
   do dir1 = 1, sys%gr%sb%dim
     do dir2 = 1, sys%gr%sb%dim
 
       call pert_setup_dir(perturbation, dir1, dir2)
 
-      trace = X(pert_expectation_value)(perturbation, sys%gr, sys%geo, hm, sys%st, sys%st%X(dontusepsi), lr(dir2, 1)%X(dl_psi))
+      trace = X(pert_expectation_value)(perturbation, sys%gr, sys%geo, hm, sys%st, psi, lr(dir2, 1)%X(dl_psi))
       
       if (nsigma == 1) then 
         trace = trace + R_CONJ(trace)
       else
         trace = trace + &
-          X(pert_expectation_value)(perturbation, sys%gr, sys%geo, hm, sys%st, lr(dir2, 2)%X(dl_psi), sys%st%X(dontusepsi))
+          X(pert_expectation_value)(perturbation, sys%gr, sys%geo, hm, sys%st, lr(dir2, 2)%X(dl_psi), psi)
       end if
      
       ! first the paramagnetic term 
       chi_para(dir1, dir2) = chi_para(dir1, dir2) + trace
 
       chi_dia(dir1, dir2) = chi_dia(dir1, dir2) + X(pert_expectation_value)(perturbation, &
-        sys%gr, sys%geo, hm, sys%st, sys%st%X(dontusepsi), sys%st%X(dontusepsi), pert_order=2)
+        sys%gr, sys%geo, hm, sys%st, psi, psi, pert_order=2)
 
     end do
   end do
-
-
+  
+  SAFE_DEALLOCATE_P(psi)
+  
   ! We now add the minus sign from the definition of the susceptibility (chi = -d^2 E /d B^2)
   chi_para(:,:) = -chi_para(:,:)/P_C**2
   chi_dia (:,:) = -chi_dia (:,:)/P_C**2
@@ -639,14 +667,26 @@ contains
   end subroutine get_permutation
 
   subroutine get_matrix_elements()
-    PUSH_SUB(X(lr_calc_beta).get_matrix_elements)
 
+    R_TYPE, allocatable :: psi1(:, :), psi2(:, :)
+
+    PUSH_SUB(X(lr_calc_beta).get_matrix_elements)
+    
+    SAFE_ALLOCATE(psi1(1:sys%gr%mesh%np_part, 1:st%d%dim))
+    SAFE_ALLOCATE(psi2(1:sys%gr%mesh%np_part, 1:st%d%dim))
+    
     do ik = st%d%kpt%start, st%d%kpt%end
       ispin = states_dim_get_spin_index(sys%st%d, ik)
       do ist = 1, st%nst
+
+        call states_get_state(st, sys%gr%mesh, ist, ik, psi1)
+        
         do ist2 = 1, st%nst
 
           if(occ_response_ .and. ist2 /= ist) cycle
+
+          call states_get_state(st, sys%gr%mesh, ist2, ik, psi2)
+          
           do ii = 1, ndir
             call pert_setup_dir(dipole, ii)
 
@@ -660,15 +700,15 @@ contains
                   forall (idim = 1:st%d%dim, ip = 1:np) ppsi(ip, idim) = kdotp_lr(ii)%X(dl_psi)(ip, idim, ist, ik)
                 end if
               else
-                call X(pert_apply)(dipole, sys%gr, sys%geo, hm, ik, st%X(dontusepsi)(:, :, ist, ik), ppsi)
+                call X(pert_apply)(dipole, sys%gr, sys%geo, hm, ik, psi1, ppsi)
               end if
 
               isigma = 1
               forall (idim = 1:st%d%dim, ip = 1:np)
-                ppsi(ip, idim) = ppsi(ip, idim) + hvar(ip, ispin, isigma, idim, ii, ifreq)*st%X(dontusepsi)(ip, idim, ist, ik)
+                ppsi(ip, idim) = ppsi(ip, idim) + hvar(ip, ispin, isigma, idim, ii, ifreq)*psi1(ip, idim)
               end forall
 
-              me010(ist2, ist, ii, ifreq, ik) = X(mf_dotp)(mesh, st%d%dim, st%X(dontusepsi)(:, :, ist2, ik), ppsi)
+              me010(ist2, ist, ii, ifreq, ik) = X(mf_dotp)(mesh, st%d%dim, psi2, ppsi)
 
               if (present(kdotp_lr) .and. ii <= sys%gr%sb%periodic_dim .and. ist == ist2) then
                 me010(ist, ist, ii, ifreq, ik) = me010(ist, ist, ii, ifreq, ik) + dl_eig(ist, ik, ii)
@@ -680,6 +720,9 @@ contains
         end do
       end do
     end do
+
+    SAFE_DEALLOCATE_A(psi1)
+    SAFE_DEALLOCATE_A(psi2)    
 
     do ik = st%d%kpt%start, st%d%kpt%end
       do ii = 1, ndir

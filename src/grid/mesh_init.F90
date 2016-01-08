@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: mesh_init.F90 14624 2015-10-03 13:39:53Z xavier $
+!! $Id: mesh_init.F90 14931 2015-12-31 02:37:35Z xavier $
 
 #include "global.h"
 
@@ -441,8 +441,8 @@ end subroutine mesh_init_stage_2
 ! ---------------------------------------------------------
 subroutine mesh_init_stage_3(mesh, stencil, mpi_grp, parent)
   type(mesh_t),              intent(inout) :: mesh
-  type(stencil_t), optional, intent(in)    :: stencil
-  type(mpi_grp_t), optional, intent(in)    :: mpi_grp
+  type(stencil_t),           intent(in)    :: stencil
+  type(mpi_grp_t),           intent(in)    :: mpi_grp
   type(mesh_t),    optional, intent(in)    :: parent
 
   integer :: ip
@@ -451,11 +451,7 @@ subroutine mesh_init_stage_3(mesh, stencil, mpi_grp, parent)
   call profiling_in(mesh_init_prof, "MESH_INIT")
 
   ! check if we are running in parallel in domains
-  mesh%parallel_in_domains = .false.
-  if(present(mpi_grp)) then
-    if (mpi_grp%size > 1) mesh%parallel_in_domains = .true.
-  end if
-
+  mesh%parallel_in_domains = (mpi_grp%size > 1)
 
   if(.not. mesh%parallel_in_domains) then
     ! When running parallel, x is computed later.
@@ -470,20 +466,13 @@ subroutine mesh_init_stage_3(mesh, stencil, mpi_grp, parent)
     end do
   end if
 
+  mesh%mpi_grp = mpi_grp 
+  
   if(mesh%parallel_in_domains) then
-    ASSERT(present(stencil))
-    
+
     call do_partition()
+
   else
-#ifdef HAVE_MPI
-    if (present(mpi_grp)) then
-      mesh%mpi_grp = mpi_grp 
-    else
-      call mpi_grp_init(mesh%mpi_grp, MPI_COMM_WORLD)
-    end if
-#else
-    call mpi_grp_init(mesh%mpi_grp, -1)
-#endif
 
     ! When running serially those two are the same.
     mesh%np      = mesh%np_global
@@ -808,8 +797,6 @@ contains
 
     PUSH_SUB(mesh_init_stage_3.do_partition)
 
-    mesh%mpi_grp = mpi_grp
-
     !%Variable MeshPartitionDir
     !%Type string
     !%Default "restart/partition"
@@ -887,13 +874,13 @@ contains
 
       !%Variable MeshPartitionWrite
       !%Type logical
-      !%Default true
+      !%Default false
       !%Section Execution::Parallelization
       !%Description
       !% If set to yes (the default), <tt>Octopus</tt> will write the mesh
       !% partition of the current run to directory <tt>MeshPartitionDir</tt>.
       !%End
-      call parse_variable('MeshPartitionWrite', .true., write_partition)
+      call parse_variable('MeshPartitionWrite', .false., write_partition)
 
       if (mpi_grp_is_root(mesh%mpi_grp)) then
         call io_mkdir(trim(partition_dir), parents=.true.)

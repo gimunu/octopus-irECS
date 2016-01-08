@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: eigen_plan_inc.F90 13643 2015-03-29 02:00:41Z xavier $
+!! $Id: eigen_plan_inc.F90 14976 2016-01-05 14:27:54Z xavier $
 
 !> This subroutine implements the preconditioned Lanczos eigensolver as
 !! described in the paper:
@@ -272,7 +272,7 @@ subroutine X(eigensolver_plan) (gr, st, hm, pre, tol, niter, converged, ik, diff
         end do
       end do ordering
 
-      if(in_debug_mode) then
+      if(debug%info) then
         do ist = 1, st%nst
           ! there do not seem to be counted iterations here
           write(message(1), '(a,i4,a,i4,a,es12.6)') &

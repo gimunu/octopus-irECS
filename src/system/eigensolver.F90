@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: eigensolver.F90 14221 2015-06-05 16:37:56Z xavier $
+!! $Id: eigensolver.F90 14976 2016-01-05 14:27:54Z xavier $
 
 #include "global.h"
 
@@ -94,7 +94,6 @@ module eigensolver_m
   integer, public, parameter :: &
        RS_PLAN    = 11,         &
        RS_CG      =  5,         &
-       RS_MG      =  7,         &
        RS_CG_NEW  =  6,         &
        RS_EVO     =  9,         &
        RS_LOBPCG  =  8,         &
@@ -306,8 +305,6 @@ contains
     !% Note: with <tt>unocc</tt>, you will need to stop the calculation
     !% by hand, since the highest states will probably never converge.
     !% Usage with more than one block of states per node is experimental, unfortunately.
-    !%Option multigrid 7
-    !% (Experimental) Multigrid eigensolver.
     !%Option arpack 12
     !% (Experimental) Implicitly Restarted Arnoldi Method. Requires the ARPACK package.
     !%Option feast 13
@@ -339,8 +336,6 @@ contains
 
     select case(eigens%es_type)
     case(RS_CG_NEW)
-    case(RS_MG)
-      call messages_experimental("multigrid eigensolver")
     case(RS_CG)
     case(RS_PLAN)
     case(RS_EVO)
@@ -570,7 +565,7 @@ contains
 
     eigens%matvec = 0
 
-    if(mpi_grp_is_root(mpi_world) .and. eigensolver_has_progress_bar(eigens) .and. .not. in_debug_mode) then
+    if(mpi_grp_is_root(mpi_world) .and. eigensolver_has_progress_bar(eigens) .and. .not. debug%info) then
       call loct_progress_bar(-1, st%nst*st%d%nik)
     end if
 
@@ -601,8 +596,6 @@ contains
         case(RS_LOBPCG)
           call deigensolver_lobpcg(gr, st, hm, eigens%pre, eigens%tolerance, maxiter, &
             eigens%converged(ik), ik, eigens%diff(:, ik), hm%d%block_size)
-        case(RS_MG)
-          call deigensolver_mg(gr%der, st, hm, eigens%sdiag, maxiter, ik, eigens%diff(:, ik))
         case(RS_RMMDIIS)
           if(iter <= eigens%rmmdiis_minimization_iter) then
             call deigensolver_rmmdiis_min(gr, st, hm, eigens%pre, maxiter, eigens%converged(ik), ik)
@@ -640,8 +633,6 @@ contains
         case(RS_LOBPCG)
           call zeigensolver_lobpcg(gr, st, hm, eigens%pre, eigens%tolerance, maxiter, &
             eigens%converged(ik), ik, eigens%diff(:, ik), hm%d%block_size)
-        case(RS_MG)
-          call zeigensolver_mg(gr%der, st, hm, eigens%sdiag, maxiter, ik, eigens%diff(:, ik))
         case(RS_RMMDIIS)
           if(iter <= eigens%rmmdiis_minimization_iter) then
             call zeigensolver_rmmdiis_min(gr, st, hm, eigens%pre, maxiter, eigens%converged(ik), ik)
@@ -684,7 +675,7 @@ contains
       call cmplxscl_choose_state_order(eigens, st, gr)
     end if
 
-    if(mpi_grp_is_root(mpi_world) .and. eigensolver_has_progress_bar(eigens) .and. .not. in_debug_mode) then
+    if(mpi_grp_is_root(mpi_world) .and. eigensolver_has_progress_bar(eigens) .and. .not. debug%info) then
       write(stdout, '(1x)')
     end if
 
@@ -764,13 +755,11 @@ contains
 
 #include "undef.F90"
 #include "real.F90"
-#include "eigen_mg_inc.F90"
 #include "eigen_plan_inc.F90"
 #include "eigen_evolution_inc.F90"
 
 #include "undef.F90"
 #include "complex.F90"
-#include "eigen_mg_inc.F90"
 #include "eigen_plan_inc.F90"
 #include "eigen_evolution_inc.F90"
 

@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: scf.F90 14802 2015-11-20 19:54:01Z xavier $
+!! $Id: scf.F90 14959 2016-01-03 16:44:16Z xavier $
 
 #include "global.h"
 
@@ -284,6 +284,13 @@ contains
       call messages_fatal()
     end if
 
+    if (scf%mix_field == OPTION__MIXFIELD__POTENTIAL .and. hm%pcm%run_pcm) then
+      call messages_write('Input: You have selected to mix the potential.', new_line = .true.)
+      call messages_write('       This might produce convergence problems for solvated systems.', new_line = .true.)
+      call messages_write('       Mix the Density instead.')
+      call messages_warning()
+    end if
+
     if(scf%mix_field == OPTION__MIXFIELD__DENSITY &
       .and. iand(hm%xc_family, XC_FAMILY_OEP + XC_FAMILY_MGGA + XC_FAMILY_HYB_MGGA) /= 0) then
 
@@ -318,7 +325,7 @@ contains
     ! now the eigensolver stuff
     call eigensolver_init(scf%eigens, gr, st)
 
-    if(scf%eigens%es_type == RS_MG .or. preconditioner_is_multigrid(scf%eigens%pre)) then
+    if(preconditioner_is_multigrid(scf%eigens%pre)) then
       if(.not. associated(gr%mgrid)) then
         SAFE_ALLOCATE(gr%mgrid)
         call multigrid_init(gr%mgrid, geo, gr%cv,gr%mesh, gr%der, gr%stencil)
@@ -620,12 +627,8 @@ contains
       call profiling_in(prof, "SCF_CYCLE")
 
       ! reset scdm flag
-       scdm_is_local = .false.
-       ! this is stupid should be done in init and isnt even neede, except for .cube files
-       scdm_geo = geo
- 
-
-
+      scdm_is_local = .false.
+       
       ! this initialization seems redundant but avoids improper optimization at -O3 by PGI 7 on chum,
       ! which would cause a failure of testsuite/linear_response/04-vib_modes.03-vib_modes_fd.inp
       scf%eigens%converged = 0

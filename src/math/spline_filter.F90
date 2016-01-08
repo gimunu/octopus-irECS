@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: spline_filter.F90 13468 2015-03-22 06:22:58Z xavier $
+!! $Id: spline_filter.F90 14978 2016-01-05 14:48:38Z xavier $
 
 #include "global.h"
 
@@ -94,7 +94,7 @@ contains
     call spline_end(splw)
     call spline_cut(spl, rcut, beta_rs)
 
-    PUSH_SUB(spline_filter_bessel)
+    POP_SUB(spline_filter_bessel)
   end subroutine spline_filter_bessel
 
 

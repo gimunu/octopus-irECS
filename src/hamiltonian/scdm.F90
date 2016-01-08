@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: scdm.F90 14788 2015-11-19 02:39:50Z xavier $
+!! $Id: scdm.F90 14960 2016-01-03 16:49:30Z xavier $
 
 #include "global.h"
 
@@ -129,9 +129,6 @@ module scdm_m
 
   type(profile_t), save :: prof_scdm, prof_scdm_QR, prof_scdm_matmul1, prof_scdm_matmul3
   
-  !> debug stuff
-  type(geometry_t), public   :: scdm_geo
-
 contains
 
 !> this initializes the states and solver to compute exact exchange using the method described in

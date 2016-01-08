@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: hamiltonian_inc.F90 14788 2015-11-19 02:39:50Z xavier $
+!! $Id: hamiltonian_inc.F90 15001 2016-01-07 06:56:31Z xavier $
 
 ! ---------------------------------------------------------
 subroutine X(hamiltonian_apply_batch) (hm, der, psib, hpsib, ik, time, Imtime, terms, set_bc)
@@ -29,19 +29,12 @@ subroutine X(hamiltonian_apply_batch) (hm, der, psib, hpsib, ik, time, Imtime, t
   integer, optional,     intent(in)    :: terms
   logical, optional,     intent(in)    :: set_bc !< If set to .false. the boundary conditions are assumed to be set previously.
 
-  integer :: nst, bs, sp
-  R_TYPE, pointer     :: epsi(:)
-  R_TYPE, allocatable :: psi_copy(:, :, :)
-
   logical :: apply_phase, pack
-  integer :: ii, ist, ip
-  R_TYPE, pointer :: hpsi(:)
+  integer :: ii
   type(batch_t), pointer :: epsib
   type(derivatives_handle_batch_t) :: handle
   integer :: terms_
   type(projection_t) :: projection
-  R_TYPE, allocatable :: psi_global(:,:), hpsi_global(:,:)
-  integer :: jj
   
   call profiling_in(prof_hamiltonian, "HAMILTONIAN")
   PUSH_SUB(X(hamiltonian_apply_batch))
@@ -67,12 +60,11 @@ subroutine X(hamiltonian_apply_batch) (hm, der, psib, hpsib, ik, time, Imtime, t
   ASSERT(batch_is_ok(hpsib))
   ASSERT(psib%nst == hpsib%nst)
   ASSERT(ik >= hm%d%kpt%start .and. ik <= hm%d%kpt%end)
-  nst = psib%nst_linear
 
   apply_phase = associated(hm%phase)
 
   pack = hamiltonian_apply_packed(hm, der%mesh) &
-    .and. (opencl_is_enabled() .or. nst > 1) &
+    .and. (opencl_is_enabled() .or. psib%nst_linear > 1) &
     .and. terms_ == TERM_ALL
 
   if(pack) then
@@ -84,23 +76,14 @@ subroutine X(hamiltonian_apply_batch) (hm, der, psib, hpsib, ik, time, Imtime, t
 
   if(apply_phase) then
     SAFE_ALLOCATE(epsib)
-    SAFE_ALLOCATE(psi_copy(1:der%mesh%np_part, 1:hm%d%dim, 1:psib%nst))
-    call batch_init(epsib, hm%d%dim, psib%nst)
-    do ii = 1, psib%nst
-      call batch_add_state(epsib, psib%states(ii)%ist, psi_copy(:, :, ii))
-    end do
-    ASSERT(batch_is_ok(epsib))
-    if(batch_is_packed(psib)) call batch_pack(epsib, copy = .false.)
+    call batch_copy(psib, epsib)
   else
     epsib => psib
   end if
 
-  bs = hardware%X(block_size)
-
   if(apply_phase) then ! we copy psi to epsi applying the exp(i k.r) phase
     call X(hamiltonian_phase)(hm, der, der%mesh%np_part, ik, .false., epsib, src = psib)
   end if
-
 
   if(iand(TERM_KINETIC, terms_) /= 0) then
     ASSERT(associated(hm%hm_base%kinetic))
@@ -120,22 +103,7 @@ subroutine X(hamiltonian_apply_batch) (hm, der, psib, hpsib, ik, time, Imtime, t
     call X(derivatives_batch_finish)(handle)
     call profiling_out(prof_kinetic_finish)
 
-    ! FIXME: need to handle OpenCL case here.
-    if(hm%cmplxscl%space) then !cmplxscl
-    !complex scale the laplacian
-      do sp = 1, der%mesh%np, bs
-        if(batch_is_packed(hpsib)) then
-          forall (ist = 1:hpsib%nst_linear, ip = sp:min(sp + bs - 1, der%mesh%np))
-            hpsib%pack%X(psi)(ist, ip) = exp(-M_TWO*M_zI*hm%cmplxscl%theta)*hpsib%pack%X(psi)(ist, ip)
-          end forall
-        else
-          do ii = 1, nst
-            call set_pointers()
-            forall(ip = sp:min(sp + bs - 1, der%mesh%np)) hpsi(ip) = exp(-M_TWO*M_zI*hm%cmplxscl%theta)*hpsi(ip)
-          end do
-        end if
-      end do
-    end if
+    if(hm%cmplxscl%space) call batch_scal(der%mesh%np, exp(-M_TWO*M_zI*hm%cmplxscl%theta), hpsib)
   else
     call batch_set_zero(hpsib)
   end if
@@ -161,93 +129,41 @@ subroutine X(hamiltonian_apply_batch) (hm, der, psib, hpsib, ik, time, Imtime, t
     call X(hamiltonian_base_magnetic)(hm%hm_base, der, hm%d, hm%ep, &
              states_dim_get_spin_index(hm%d, ik), epsib, hpsib)
   end if
-
+  
   if (iand(TERM_OTHERS, terms_) /= 0 ) then
     call X(hamiltonian_base_rashba)(hm%hm_base, der, hm%d, epsib, hpsib)
   end if
 
   if (iand(TERM_OTHERS, terms_) /= 0) then
 
-    if(hm%theory_level == HARTREE) then
-      do ii = 1, psib%nst
-        call X(exchange_operator_hartree)(hm, der, epsib%states(ii)%X(psi), &
-          hpsib%states(ii)%X(psi), psib%states(ii)%ist, ik,hm%exx_coef)
-      end do
-    end if
-    
-    if(hm%theory_level == HARTREE_FOCK) then
-      ASSERT(.not. batch_is_packed(hpsib))
+    call profiling_in(prof_exx, "EXCHANGE_OPERATOR")
+    select case(hm%theory_level)
 
+    case(HARTREE)
+      call X(exchange_operator_hartree)(hm, der, ik, hm%exx_coef, epsib, hpsib)
+
+    case(HARTREE_FOCK)
       if(hm%scdm_EXX)  then
-        ! make sure scdm is initialized
-        call scdm_init(hm%hf_st, der,psolver%cube, hm%scdm)
-        ! make sure scdm is localized
-        call X(scdm_localize)(hm%hf_st, der%mesh, hm%scdm)
-        ! time the overhead associated with the SCDM operator
-        call profiling_in(prof_exx,'SCDM_EXX')
-
-        ! to apply the scdm exact exchange we need the state on the global mesh
-        SAFE_ALLOCATE(psi_global(1:der%mesh%np_global,1:hm%hf_st%d%dim))
-        ! and apply it to the global hpsi
-        SAFE_ALLOCATE(hpsi_global(1:der%mesh%np_global,1:hm%hf_st%d%dim))
-
-        do ii = 1,psib%nst
-          psi_global(:,:) = M_ZERO
-          hpsi_global(:,:) = M_ZERO
-#ifdef HAVE_MPI
-          ! the gathering is done for the domain distribution, the states are still local to the st%mpi_grp
-          call vec_allgather(der%mesh%vp,  psi_global(1:der%mesh%np_global,1),epsib%states(ii)%X(psi)(:,1) )
-          call vec_allgather(der%mesh%vp, hpsi_global(1:der%mesh%np_global,1),hpsib%states(ii)%X(psi)(:,1) )
-#endif
-          ! call with global hpsi
-          call X(scdm_exchange_operator)(hm, der,  psi_global, hpsi_global, psib%states(ii)%ist, ik, hm%exx_coef)
-#ifdef HAVE_MPI
-          call vec_scatter(der%mesh%vp,0, hpsi_global(1:der%mesh%np_global,1), hpsib%states(ii)%X(psi)(:,1))
-#endif
-        end do
-
-        SAFE_DEALLOCATE_A(psi_global)
-        SAFE_DEALLOCATE_A(hpsi_global)
-        call profiling_out(prof_exx)
+        call X(scdm_exchange_operator)(hm, der, epsib, hpsib, ik, hm%exx_coef)
       else
         ! standard HF 
-        do ii = 1,psib%nst
-          call X(exchange_operator)(hm, der, epsib%states(ii)%X(psi), &
-               hpsib%states(ii)%X(psi), psib%states(ii)%ist, ik,hm%exx_coef)
-        end do
+        call X(exchange_operator)(hm, der, ik, hm%exx_coef, epsib, hpsib)
+      end if
 
-      end if!theory levels
-    end if! other terms
-   
-    if(hm%theory_level == RDMFT ) then
-      ASSERT(.not. batch_is_packed(hpsib))
-      do ii = 1, psib%nst
-        call X(rdmft_exchange_operator)(hm, der, epsib%states(ii)%X(psi), hpsib%states(ii)%X(psi), psib%states(ii)%ist)
-      end do
-    end if
-    
-    if(hm%ab == IMAGINARY_ABSORBING) then
-      ASSERT(.not. batch_is_packed(hpsib))
-      do ii = 1, nst
-        call set_pointers()
-        if(present(time)) call X(vborders)(der, hm, epsi, hpsi)
-      end do
-    end if
+    case(RDMFT)
+      call X(rdmft_exchange_operator)(hm, der, ik, epsib, hpsib)
+
+    end select
+    call profiling_out(prof_exx)
     
   end if
 
-  if (iand(TERM_MGGA, terms_) /= 0 .and. &
-    (iand(hm%xc_family, XC_FAMILY_MGGA + XC_FAMILY_HYB_MGGA) /= 0)) then
-    ASSERT(.not. batch_is_packed(hpsib))
-    do ii = 1, nst
-      call set_pointers()
-      call X(h_mgga_terms)(hm, der, epsi, hpsi, ik)
-    end do
+  if (iand(TERM_MGGA, terms_) /= 0 .and. (iand(hm%xc_family, XC_FAMILY_MGGA + XC_FAMILY_HYB_MGGA) /= 0)) then
+    call X(h_mgga_terms)(hm, der, ik, epsib, hpsib)
   end if
 
   if(apply_phase) then
     call X(hamiltonian_phase)(hm, der, der%mesh%np, ik, .true., hpsib)
-    if(batch_is_packed(epsib)) call batch_unpack(epsib, copy = .false.)
     call batch_end(epsib)
     SAFE_DEALLOCATE_P(epsib)
   end if
@@ -260,15 +176,6 @@ subroutine X(hamiltonian_apply_batch) (hm, der, psib, hpsib, ik, time, Imtime, t
   POP_SUB(X(hamiltonian_apply_batch))
   call profiling_out(prof_hamiltonian)
 
-contains
-
-  subroutine set_pointers
-    ! no push_sub since called very frequently
-
-    epsi => epsib%states_linear(ii)%X(psi)
-    hpsi => hpsib%states_linear(ii)%X(psi)
-  end subroutine set_pointers
-
 end subroutine X(hamiltonian_apply_batch)
 
 ! ---------------------------------------------------------
@@ -279,8 +186,7 @@ subroutine X(hamiltonian_external)(this, mesh, psib, vpsib)
   type(batch_t),               intent(in)    :: psib
   type(batch_t),               intent(inout) :: vpsib
 
-  type(base_potential_t), pointer :: live_external
-  FLOAT, dimension(:),    pointer :: vpsl
+  FLOAT, dimension(:), pointer :: vpsl
   FLOAT, allocatable :: vpsl_spin(:,:), Imvpsl_spin(:,:)
 #ifdef HAVE_OPENCL
   integer :: pnp, offset, ispin
@@ -291,16 +197,14 @@ subroutine X(hamiltonian_external)(this, mesh, psib, vpsib)
 
   SAFE_ALLOCATE(vpsl_spin(1:mesh%np, 1:this%d%nspin))
 
-  nullify(live_external, vpsl)
+  nullify(vpsl)
   if(associated(this%ep%subsys_external))then
     ! Sets the vpsl pointer to the "live" part of the subsystem potential.
-    call base_potential_gets(this%ep%subsys_external, "live", live_external)
-    ASSERT(associated(live_external))
-    call base_potential_get(live_external, vpsl)
+    call base_potential_gets(this%ep%subsys_external, "live", vpsl)
     ASSERT(associated(vpsl))
   else
     ! Sets the vpsl pointer to the total potential.
-    vpsl=>this%ep%vpsl
+    vpsl => this%ep%vpsl
   end if
 
   vpsl_spin(1:mesh%np, 1) = vpsl(1:mesh%np)
@@ -400,6 +304,7 @@ subroutine X(hamiltonian_apply_all) (hm, xc, der, st, hst, time, Imtime)
 
   integer :: ik, ib, ist
   R_TYPE, allocatable :: psi(:, :)
+  CMPLX,  allocatable :: psiall(:, :, :, :)
   
   PUSH_SUB(X(hamiltonian_apply_all))
 
@@ -418,8 +323,15 @@ subroutine X(hamiltonian_apply_all) (hm, xc, der, st, hst, time, Imtime)
   end if
 
   if(hamiltonian_oct_exchange(hm)) then
-    call hamiltonian_prepare_oct_exchange(hm, der%mesh, st%zdontusepsi, xc)
 
+    SAFE_ALLOCATE(psiall(der%mesh%np_part, 1:hst%d%dim, st%st_start:st%st_end, st%d%kpt%start:st%d%kpt%end))
+
+    call states_get_state(st, der%mesh, psiall)
+    
+    call hamiltonian_prepare_oct_exchange(hm, der%mesh, psiall, xc)
+
+    SAFE_DEALLOCATE_A(psiall)
+    
     SAFE_ALLOCATE(psi(der%mesh%np_part, 1:hst%d%dim))
     
     do ik = 1, st%d%nik
@@ -431,6 +343,7 @@ subroutine X(hamiltonian_apply_all) (hm, xc, der, st, hst, time, Imtime)
     end do
 
     SAFE_DEALLOCATE_A(psi)
+    
   end if
 
   POP_SUB(X(hamiltonian_apply_all))
@@ -438,74 +351,114 @@ end subroutine X(hamiltonian_apply_all)
 
 
 ! ---------------------------------------------------------
-subroutine X(exchange_operator) (hm, der, psi, hpsi, ist, ik, exx_coef)
+
+subroutine X(exchange_operator_single)(hm, der, ist, ik, exx_coef, psi, hpsi)
   type(hamiltonian_t), intent(in)    :: hm
   type(derivatives_t), intent(in)    :: der
-  R_TYPE,              intent(inout) :: psi(:,:)
-  R_TYPE,              intent(inout) :: hpsi(:,:)
   integer,             intent(in)    :: ist
   integer,             intent(in)    :: ik
   FLOAT,               intent(in)    :: exx_coef
+  R_TYPE,              intent(inout) :: psi(:, :)
+  R_TYPE,              intent(inout) :: hpsi(:, :)
 
-  integer :: jst, ip, idim, ik2, ib, ii
+  type(batch_t) :: psib, hpsib
+
+  PUSH_SUB(X(exchange_operator_single))
+
+  call batch_init(psib, hm%d%dim, 1)
+  call batch_add_state(psib, ist, psi)
+  call batch_init(hpsib, hm%d%dim, 1)
+  call batch_add_state(hpsib, ist, hpsi)
+
+  call X(exchange_operator)(hm, der, ik, exx_coef, psib, hpsib)
+
+  call batch_end(psib)
+  call batch_end(hpsib)
+
+  POP_SUB(X(exchange_operator_single))
+end subroutine X(exchange_operator_single)
+
+! ---------------------------------------------------------
+
+subroutine X(exchange_operator)(hm, der, ik, exx_coef, psib, hpsib)
+  type(hamiltonian_t), intent(in)    :: hm
+  type(derivatives_t), intent(in)    :: der
+  integer,             intent(in)    :: ik
+  FLOAT,               intent(in)    :: exx_coef
+  type(batch_t),       intent(inout) :: psib
+  type(batch_t),       intent(inout) :: hpsib
+
+  integer :: ibatch, jst, ip, idim, ik2, ib, ii, ist
   type(batch_t), pointer :: psi2b
   FLOAT                              :: ff
-  R_TYPE, allocatable :: rho(:), pot(:), psi2(:, :)
+  R_TYPE, allocatable :: rho(:), pot(:), psi2(:, :), psi(:, :), hpsi(:, :)
 
   PUSH_SUB(X(exchange_operator))
 
   ASSERT(associated(hm%hf_st))
-  
+
   if(der%mesh%sb%kpoints%full%npoints > 1) call messages_not_implemented("exchange operator with k-points")
 
+  SAFE_ALLOCATE(psi(1:der%mesh%np, 1:hm%d%dim))
+  SAFE_ALLOCATE(hpsi(1:der%mesh%np, 1:hm%d%dim))
   SAFE_ALLOCATE(rho(1:der%mesh%np))
   SAFE_ALLOCATE(pot(1:der%mesh%np))
   SAFE_ALLOCATE(psi2(1:der%mesh%np, 1:hm%d%dim))
 
-  do ik2 = 1, hm%d%nik
-    if(states_dim_get_spin_index(hm%d, ik2) /= states_dim_get_spin_index(hm%d, ik)) cycle
+  do ibatch = 1, psib%nst
+    ist = psib%states(ibatch)%ist
+    call batch_get_state(psib, ibatch, der%mesh%np, psi)
+    call batch_get_state(hpsib, ibatch, der%mesh%np, hpsi)
 
-    do ib = 1, hm%hf_st%group%nblocks
+    do ik2 = 1, hm%d%nik
+      if(states_dim_get_spin_index(hm%d, ik2) /= states_dim_get_spin_index(hm%d, ik)) cycle
 
-      call states_parallel_get_block(hm%hf_st, der%mesh, ib, ik2, psi2b)
-      
-      do ii = 1, psi2b%nst
+      do ib = 1, hm%hf_st%group%nblocks
 
-        jst = psi2b%states(ii)%ist
-        
-        if(hm%hf_st%occ(jst, ik2) < M_EPSILON) cycle
-        
-        pot = R_TOTYPE(M_ZERO)
-        rho = R_TOTYPE(M_ZERO)
-        
-        call batch_get_state(psi2b, ii, der%mesh%np, psi2)
-        
-        if(hm%cmplxscl%space) psi2 = R_CONJ(psi2)
-        
-        do idim = 1, hm%hf_st%d%dim
-          forall(ip = 1:der%mesh%np)
-            rho(ip) = rho(ip) + R_CONJ(psi2(ip, idim))*psi(ip, idim)
-          end forall
+        call states_parallel_get_block(hm%hf_st, der%mesh, ib, ik2, psi2b)
+
+        do ii = 1, psi2b%nst
+
+          jst = psi2b%states(ii)%ist
+
+          if(hm%hf_st%occ(jst, ik2) < M_EPSILON) cycle
+
+          pot = R_TOTYPE(M_ZERO)
+          rho = R_TOTYPE(M_ZERO)
+
+          call batch_get_state(psi2b, ii, der%mesh%np, psi2)
+
+          if(hm%cmplxscl%space) psi2 = R_CONJ(psi2)
+
+          do idim = 1, hm%hf_st%d%dim
+            forall(ip = 1:der%mesh%np)
+              rho(ip) = rho(ip) + R_CONJ(psi2(ip, idim))*psi(ip, idim)
+            end forall
+          end do
+
+          call X(poisson_solve)(psolver, pot, rho, all_nodes = .false.)
+
+          ff = hm%hf_st%occ(jst, ik2)
+          if(hm%d%ispin == UNPOLARIZED) ff = M_HALF*ff
+
+          do idim = 1, hm%hf_st%d%dim
+            forall(ip = 1:der%mesh%np)
+              hpsi(ip, idim) = hpsi(ip, idim) - exx_coef*ff*psi2(ip, idim)*pot(ip)
+            end forall
+          end do
+
         end do
-        
-        call X(poisson_solve)(psolver, pot, rho, all_nodes = .false.)
-        
-        ff = hm%hf_st%occ(jst, ik2)
-        if(hm%d%ispin == UNPOLARIZED) ff = M_HALF*ff
-        
-        do idim = 1, hm%hf_st%d%dim
-          forall(ip = 1:der%mesh%np)
-            hpsi(ip, idim) = hpsi(ip, idim) - exx_coef*ff*psi2(ip, idim)*pot(ip)
-          end forall
-        end do
+
+        call states_parallel_release_block(hm%hf_st, ib, ik2, psi2b)
 
       end do
-
-      call states_parallel_release_block(hm%hf_st, ib, ik2, psi2b)
-
     end do
+    call batch_set_state(hpsib, ibatch, der%mesh%np, hpsi)
+
   end do
 
+  SAFE_DEALLOCATE_A(psi)
+  SAFE_DEALLOCATE_A(hpsi)
   SAFE_DEALLOCATE_A(rho)
   SAFE_DEALLOCATE_A(pot)
   SAFE_DEALLOCATE_A(psi2)
@@ -515,59 +468,71 @@ end subroutine X(exchange_operator)
 
 ! ---------------------------------------------------------
 
-subroutine X(exchange_operator_hartree) (hm, der, psi, hpsi, ist, ik, exx_coef)
+subroutine X(exchange_operator_hartree) (hm, der, ik, exx_coef, psib, hpsib)
   type(hamiltonian_t), intent(in)    :: hm
   type(derivatives_t), intent(in)    :: der
-  R_TYPE,              intent(inout) :: psi(:,:)
-  R_TYPE,              intent(inout) :: hpsi(:,:)
-  integer,             intent(in)    :: ist
   integer,             intent(in)    :: ik
   FLOAT,               intent(in)    :: exx_coef
+  type(batch_t),       intent(inout) :: psib
+  type(batch_t),       intent(inout) :: hpsib
 
-  integer :: ip, idim, ik2
-  FLOAT                              :: ff
-  R_TYPE, allocatable :: rho(:), pot(:), psi2(:, :)
+  integer :: ibatch, ip, idim, ik2, ist
+  FLOAT   :: ff
+  R_TYPE, allocatable :: rho(:), pot(:), psi2(:, :), psi(:, :), hpsi(:, :)
 
   PUSH_SUB(X(exchange_operator))
 
   if(der%mesh%sb%kpoints%full%npoints > 1) call messages_not_implemented("exchange operator with k-points")
   if(hm%hf_st%parallel_in_states) call messages_not_implemented("exchange operator parallel in states")
 
+  SAFE_ALLOCATE(psi(1:der%mesh%np, 1:hm%d%dim))
+  SAFE_ALLOCATE(hpsi(1:der%mesh%np, 1:hm%d%dim))
   SAFE_ALLOCATE(rho(1:der%mesh%np))
   SAFE_ALLOCATE(pot(1:der%mesh%np))
   SAFE_ALLOCATE(psi2(1:der%mesh%np, 1:hm%d%dim))
 
-  do ik2 = 1, hm%d%nik
-    if(states_dim_get_spin_index(hm%d, ik2) /= states_dim_get_spin_index(hm%d, ik)) cycle
+  do ibatch = 1, psib%nst
+    ist = psib%states(ibatch)%ist
+    call batch_get_state(psib, ibatch, der%mesh%np, psi)
+    call batch_get_state(hpsib, ibatch, der%mesh%np, hpsi)
     
-    if(hm%hf_st%occ(ist, ik2) < M_EPSILON) cycle
-    
-    pot = R_TOTYPE(M_ZERO)
-    rho = R_TOTYPE(M_ZERO)
-    
-    call states_get_state(hm%hf_st, der%mesh, ist, ik2, psi2)
-    
-    if(hm%cmplxscl%space) psi2(1:der%mesh%np, 1:hm%d%dim) = R_CONJ(psi2(1:der%mesh%np, 1:hm%d%dim))
-    
-    do idim = 1, hm%hf_st%d%dim
-      forall(ip = 1:der%mesh%np)
-        rho(ip) = rho(ip) + R_CONJ(psi2(ip, idim))*psi(ip, idim)
-      end forall
+    do ik2 = 1, hm%d%nik
+      if(states_dim_get_spin_index(hm%d, ik2) /= states_dim_get_spin_index(hm%d, ik)) cycle
+
+      if(hm%hf_st%occ(ist, ik2) < M_EPSILON) cycle
+
+      pot = R_TOTYPE(M_ZERO)
+      rho = R_TOTYPE(M_ZERO)
+
+      call states_get_state(hm%hf_st, der%mesh, ist, ik2, psi2)
+
+      if(hm%cmplxscl%space) psi2(1:der%mesh%np, 1:hm%d%dim) = R_CONJ(psi2(1:der%mesh%np, 1:hm%d%dim))
+
+      do idim = 1, hm%hf_st%d%dim
+        forall(ip = 1:der%mesh%np)
+          rho(ip) = rho(ip) + R_CONJ(psi2(ip, idim))*psi(ip, idim)
+        end forall
+      end do
+
+      call X(poisson_solve)(psolver, pot, rho, all_nodes = .false.)
+
+      ff = hm%hf_st%occ(ist, ik2)
+      if(hm%d%ispin == UNPOLARIZED) ff = M_HALF*ff
+
+      do idim = 1, hm%hf_st%d%dim
+        forall(ip = 1:der%mesh%np)
+          hpsi(ip, idim) = hpsi(ip, idim) - exx_coef*ff*psi2(ip, idim)*pot(ip)
+        end forall
+      end do
+
     end do
-    
-    call X(poisson_solve)(psolver, pot, rho, all_nodes = .false.)
-    
-    ff = hm%hf_st%occ(ist, ik2)
-    if(hm%d%ispin == UNPOLARIZED) ff = M_HALF*ff
-    
-    do idim = 1, hm%hf_st%d%dim
-      forall(ip = 1:der%mesh%np)
-        hpsi(ip, idim) = hpsi(ip, idim) - exx_coef*ff*psi2(ip, idim)*pot(ip)
-      end forall
-    end do
+
+    call batch_set_state(hpsib, ibatch, der%mesh%np, hpsi)
     
   end do
 
+  SAFE_DEALLOCATE_A(psi)
+  SAFE_DEALLOCATE_A(hpsi)
   SAFE_DEALLOCATE_A(rho)
   SAFE_DEALLOCATE_A(pot)
   SAFE_DEALLOCATE_A(psi2)
@@ -577,94 +542,141 @@ end subroutine X(exchange_operator_hartree)
 
 ! scdm_EXX
 ! ---------------------------------------------------------
-subroutine X(scdm_exchange_operator) (hm, der, psi, hpsi, ist, ik, exx_coef)
+subroutine X(scdm_exchange_operator) (hm, der, psib, hpsib, ik, exx_coef)
   type(hamiltonian_t), intent(in)    :: hm
   type(derivatives_t), intent(in)    :: der
-  R_TYPE,              intent(inout) :: psi(:,:)
-  R_TYPE,              intent(inout) :: hpsi(:,:)
-  integer,             intent(in)    :: ist
+  type(batch_t),       intent(inout) :: psib
+  type(batch_t),       intent(inout) :: hpsib
   integer,             intent(in)    :: ik
   FLOAT,               intent(in)    :: exx_coef
 
-  integer :: jst, ip, idim, ik2
+  integer :: ist, jst, ip, idim, ik2, ibatch
+  integer :: ii, jj, kk, ll, count
   FLOAT :: ff, rr(3), dist
-  ! 
-  R_TYPE, allocatable :: rho_l(:), pot_l(:)
-  integer :: ii,jj,kk,ll, count
-  R_TYPE  :: temp_state_global(der%mesh%np_global,hm%hf_st%d%dim)
+  R_TYPE, allocatable :: rho_l(:), pot_l(:), psil(:, :), hpsil(:, :), psi(:, :), hpsi(:, :), temp_state_global(:, :)
 
   PUSH_SUB(X(scdm_exchange_operator))
-  call profiling_in(prof_exx_scdm,'SCDM_EXX_OPERATOR')
+  
+  call profiling_in(prof_exx_scdm, 'SCDM_EXX_OPERATOR')
+
   if(der%mesh%sb%kpoints%full%npoints > 1) call messages_not_implemented("exchange operator with k-points")
   
+  ! make sure scdm is initialized
+  call scdm_init(hm%hf_st, der, psolver%cube, hm%scdm)
+  ! make sure scdm is localized
+  call X(scdm_localize)(hm%hf_st, der%mesh, hm%scdm)
+  
+  SAFE_ALLOCATE(psil(1:der%mesh%np, 1:hm%d%dim))
+  SAFE_ALLOCATE(hpsil(1:der%mesh%np, 1:hm%d%dim))
+  SAFE_ALLOCATE(psi(1:der%mesh%np_global, 1:hm%d%dim))
+  SAFE_ALLOCATE(hpsi(1:der%mesh%np_global, 1:hm%d%dim))
+  SAFE_ALLOCATE(temp_state_global(der%mesh%np_global, hm%hf_st%d%dim))
   SAFE_ALLOCATE(rho_l(1:hm%scdm%full_box))
   SAFE_ALLOCATE(pot_l(1:hm%scdm%full_box))
-
-  ! accumulate exchange contributino to Hpsi in a temp array and add to Hpsi at the end
-  temp_state_global(:,:) = M_ZERO
   
-  do ik2 = 1, hm%d%nik
-    if(states_dim_get_spin_index(hm%d, ik2) /= states_dim_get_spin_index(hm%d, ik)) cycle
-    count = 0
-    do jst = hm%scdm%st_exx_start, hm%scdm%st_exx_end
-  
-      if(hm%hf_st%occ(jst, ik2) < M_EPSILON) cycle
-      ! for psi in scdm representation check if it overlaps with the box of jst
-      ! NOTE: this can be faster by building an array with overlapping index pairs
-      !       within the radius of scdm%box_size
-      if(hm%scdm%psi_scdm) then
-        do ii = 1, 3
-          rr(1:3) = hm%scdm%center(ii,ist)-hm%scdm%center(ii,jst)
-        end do
-        dist = sqrt(dot_product(rr,rr))
-        if(dist.gt.hm%scdm%box_size) cycle
-      end if
-      
-      ! in Hartree we just remove the self-interaction
-      if(hm%theory_level == HARTREE .and. jst /= ist) cycle
+  do ibatch = 1, psib%nst
+    ist = psib%states(ibatch)%ist
+    
+    call batch_get_state(psib, ibatch, der%mesh%np, psil)
+    call batch_get_state(hpsib, ibatch, der%mesh%np, hpsil)
 
-      ! for scdm do product only in the local box
-      rho_l(:) = M_ZERO
+    if(der%mesh%parallel_in_domains) then
+#ifdef HAVE_MPI
+      ! the gathering is done for the domain distribution, the states are still local to the st%mpi_grp
+      call vec_allgather(der%mesh%vp, psi(:, 1), psil(:, 1))
+      call vec_allgather(der%mesh%vp, hpsi(:, 1), hpsil(:, 1))
+#endif
+    else
+      psi(1:der%mesh%np, 1:hm%d%dim) = psil(1:der%mesh%np, 1:hm%d%dim)
+      hpsi(1:der%mesh%np, 1:hm%d%dim) = hpsil(1:der%mesh%np, 1:hm%d%dim)
+    end if
+    
+    ! accumulate exchange contribution to Hpsi in a temp array and add to Hpsi at the end
+    temp_state_global(:,:) = M_ZERO
 
-      ! copy density to local box
-      do jj=1,hm%scdm%box_size*2+1
-        do kk=1,hm%scdm%box_size*2+1
-          do ll=1,hm%scdm%box_size*2+1
-            ip = (jj-1)*((hm%scdm%box_size*2+1))**2+(kk-1)*((hm%scdm%box_size*2+1)) + ll
-            rho_l(ip) = R_CONJ(hm%scdm%X(psi)(ip,jst))*psi(hm%scdm%box(jj,kk,ll,jst), 1)
+    do ik2 = 1, hm%d%nik
+      if(states_dim_get_spin_index(hm%d, ik2) /= states_dim_get_spin_index(hm%d, ik)) cycle
+      count = 0
+      do jst = hm%scdm%st_exx_start, hm%scdm%st_exx_end
+
+        if(hm%hf_st%occ(jst, ik2) < M_EPSILON) cycle
+        ! for psi in scdm representation check if it overlaps with the box of jst
+        ! NOTE: this can be faster by building an array with overlapping index pairs
+        !       within the radius of scdm%box_size
+        if(hm%scdm%psi_scdm) then
+          do ii = 1, 3
+            rr(1:3) = hm%scdm%center(ii,ist) - hm%scdm%center(ii,jst)
           end do
-        end do
-      end do
+          dist = sqrt(dot_product(rr, rr))
+          if(dist .gt. hm%scdm%box_size) cycle
+        end if
 
-      call X(poisson_solve)(hm%scdm%poisson, pot_l, rho_l, all_nodes=.false.)
-      
-      ff = hm%hf_st%occ(jst, ik2)
-      if(hm%d%ispin == UNPOLARIZED) ff = M_HALF*ff
+        ! in Hartree we just remove the self-interaction
+        if(hm%theory_level == HARTREE .and. jst /= ist) cycle
 
-      do idim = 1, hm%hf_st%d%dim
-        ! potential in local box to full H*psi 
-        do jj=1,hm%scdm%box_size*2+1
-          do kk=1,hm%scdm%box_size*2+1
-            do ll=1,hm%scdm%box_size*2+1
-              ip = (jj-1)*((hm%scdm%box_size*2+1))**2+(kk-1)*((hm%scdm%box_size*2+1)) + ll
-              temp_state_global(hm%scdm%box(jj,kk,ll,jst),idim) = &
-                    temp_state_global(hm%scdm%box(jj,kk,ll,jst),idim) - exx_coef*ff*hm%scdm%X(psi)(ip,jst)*pot_l(ip)
+        ! for scdm do product only in the local box
+        rho_l(:) = M_ZERO
+
+        ! copy density to local box
+        do jj = 1, hm%scdm%box_size*2 + 1
+          do kk = 1, hm%scdm%box_size*2 + 1
+            do ll = 1, hm%scdm%box_size*2 + 1
+              ip = (jj - 1)*((hm%scdm%box_size*2 + 1))**2+(kk - 1)*((hm%scdm%box_size*2 + 1)) + ll
+              rho_l(ip) = R_CONJ(hm%scdm%X(psi)(ip, jst))*psi(hm%scdm%box(jj, kk, ll, jst), 1)
             end do
           end do
         end do
 
-      end do
- 
-    end do
-  end do
+        call X(poisson_solve)(hm%scdm%poisson, pot_l, rho_l, all_nodes=.false.)
 
-  ! sum contributions to hpsi from all processes in the st_exx_grp group
-  call comm_allreduce(hm%scdm%st_exx_grp%comm,temp_state_global)
-  ! add exchange contribution to the input state
-  hpsi(1:der%mesh%np_global,1) =  hpsi(1:der%mesh%np_global,1) +  temp_state_global(1:der%mesh%np_global,1)
+        ff = hm%hf_st%occ(jst, ik2)
+        if(hm%d%ispin == UNPOLARIZED) ff = M_HALF*ff
+
+        do idim = 1, hm%hf_st%d%dim
+          ! potential in local box to full H*psi 
+          do jj =1, hm%scdm%box_size*2 + 1
+            do kk =1, hm%scdm%box_size*2 + 1
+              do ll =1, hm%scdm%box_size*2 + 1
+                ip = (jj - 1)*((hm%scdm%box_size*2 + 1))**2 + (kk - 1)*((hm%scdm%box_size*2 + 1)) + ll
+                temp_state_global(hm%scdm%box(jj, kk, ll, jst), idim) = &
+                  temp_state_global(hm%scdm%box(jj, kk, ll, jst), idim) - exx_coef*ff*hm%scdm%X(psi)(ip, jst)*pot_l(ip)
+              end do
+            end do
+          end do
+
+        end do
+
+      end do
+    end do
+
+    ! sum contributions to hpsi from all processes in the st_exx_grp group
+    call comm_allreduce(hm%scdm%st_exx_grp%comm, temp_state_global)
+    
+    ! add exchange contribution to the input state
+    hpsi(1:der%mesh%np_global, 1) =  hpsi(1:der%mesh%np_global, 1) + temp_state_global(1:der%mesh%np_global, 1)
+
+    if(der%mesh%parallel_in_domains) then
+#ifdef HAVE_MPI
+      call vec_scatter(der%mesh%vp, 0, hpsi(:, 1), hpsil(:, 1))
+#endif
+    else
+      hpsil(1:der%mesh%np, 1:hm%d%dim) = hpsi(1:der%mesh%np, 1:hm%d%dim)
+    end if
+
+    call batch_set_state(hpsib, ibatch, der%mesh%np, hpsil)
+  end do
+  
+  SAFE_DEALLOCATE_A(psil)
+  SAFE_DEALLOCATE_A(hpsil)
+  SAFE_DEALLOCATE_A(psi)
+  SAFE_DEALLOCATE_A(hpsi)
+  SAFE_DEALLOCATE_A(temp_state_global)
+  SAFE_DEALLOCATE_A(rho_l)
+  SAFE_DEALLOCATE_A(pot_l)
+
   call profiling_out(prof_exx_scdm)
- 
- POP_SUB(X(scdm_exchange_operator))
+  
+  POP_SUB(X(scdm_exchange_operator))
 end subroutine X(scdm_exchange_operator)
 
 ! ---------------------------------------------------------
@@ -787,43 +799,68 @@ subroutine X(vborders) (der, hm, psi, hpsi)
   if(hm%ab == IMAGINARY_ABSORBING) then
     forall(ip = 1:der%mesh%np) hpsi(ip) = hpsi(ip) + M_zI*hm%ab_pot(ip)*psi(ip)
   end if
-
+   
   POP_SUB(X(vborders))
 end subroutine X(vborders)
 
 
 ! ---------------------------------------------------------
-subroutine X(h_mgga_terms) (hm, der, psi, hpsi, ik)
+subroutine X(h_mgga_terms) (hm, der, ik, psib, hpsib)
   type(hamiltonian_t), intent(in)    :: hm
   type(derivatives_t), intent(in)    :: der
-  R_TYPE,              intent(inout) :: psi(:)
-  R_TYPE,              intent(inout) :: hpsi(:)
   integer,             intent(in)    :: ik
+  type(batch_t),       intent(inout) :: psib
+  type(batch_t),       intent(inout) :: hpsib
 
-  integer :: ispace, ispin
-  R_TYPE, allocatable :: cgrad(:,:), diverg(:), grad(:, :)
-
+  integer :: ispin, ii, idir
+  R_TYPE, allocatable :: grad(:,:), diverg(:)
+  type(batch_t) :: divb
+  type(batch_t), allocatable :: gradb(:)
+  
   PUSH_SUB(X(h_mgga_terms))
 
+  ASSERT(.not. batch_is_packed(psib))
+  
   ispin = states_dim_get_spin_index(hm%d, ik)
 
   SAFE_ALLOCATE(grad(1:der%mesh%np_part, 1:der%mesh%sb%dim))
-  SAFE_ALLOCATE(cgrad(1:der%mesh%np_part, 1:der%mesh%sb%dim))
   SAFE_ALLOCATE(diverg(1:der%mesh%np))
 
-  call X(derivatives_grad)(der, psi, grad, ghost_update = .false., set_bc = .false.)
+  SAFE_ALLOCATE(gradb(1:der%mesh%sb%dim))
 
-  do ispace = 1, der%mesh%sb%dim
-    cgrad(1:der%mesh%np, ispace) = grad(1:der%mesh%np, ispace)*hm%vtau(1:der%mesh%np, ispin)
+  call batch_copy(hpsib, divb)
+  
+  do idir = 1, der%mesh%sb%dim
+    call batch_copy(hpsib, gradb(idir))
+    call X(derivatives_batch_perform)(der%grad(idir), der, psib, gradb(idir), ghost_update = .false., set_bc = .false.)
+  end do
+  
+  do ii = 1, psib%nst_linear
+
+    do idir = 1, der%mesh%sb%dim
+      call batch_get_state(gradb(idir), ii, der%mesh%np, grad(:, idir))
+    end do
+    
+    do idir = 1, der%mesh%sb%dim
+      grad(1:der%mesh%np, idir) = grad(1:der%mesh%np, idir)*hm%vtau(1:der%mesh%np, ispin)
+    end do
+    
+    call X(derivatives_div)(der, grad, diverg)
+
+    call batch_set_state(divb, ii, der%mesh%np, diverg)
+
   end do
 
-  diverg(1:der%mesh%np) = M_ZERO
-  call X(derivatives_div)(der, cgrad, diverg)
+  call batch_axpy(der%mesh%np, CNST(-1.0), divb, hpsib)
 
-  hpsi(1:der%mesh%np) = hpsi(1:der%mesh%np) - diverg(1:der%mesh%np)
+  do idir = 1, der%mesh%sb%dim
+    call batch_end(gradb(idir))
+  end do
 
+  call batch_end(divb)
+  
+  SAFE_DEALLOCATE_A(gradb)
   SAFE_DEALLOCATE_A(grad)
-  SAFE_DEALLOCATE_A(cgrad)
   SAFE_DEALLOCATE_A(diverg)
 
   POP_SUB(X(h_mgga_terms))
@@ -1021,48 +1058,61 @@ subroutine X(hamiltonian_phase)(this, der, np, iqn, conjugate, psib, src)
 end subroutine X(hamiltonian_phase)
 
 ! ---------------------------------------------------------
-subroutine X(rdmft_exchange_operator) (hm, der, psi, hpsi, ist)
+subroutine X(rdmft_exchange_operator) (hm, der, ik, psib, hpsib)
   type(hamiltonian_t), intent(in)    :: hm
   type(derivatives_t), intent(in)    :: der
-  R_TYPE,              intent(inout) :: psi(:,:)
-  R_TYPE,              intent(inout) :: hpsi(:,:)
-  integer,             intent(in)    :: ist
+  integer,             intent(in)    :: ik
+  type(batch_t),       intent(inout) :: psib
+  type(batch_t),       intent(inout) :: hpsib
 
-  R_TYPE, allocatable :: rho(:), pot(:), psi1(:,:), hpsi1(:)
-  integer :: jst, ip
+  R_TYPE, allocatable :: rho(:), pot(:), psi1(:,:), hpsi1(:), psi(:, :), hpsi(:, :)
+  integer :: jst, ip, ist, ibatch
 
   PUSH_SUB(X(rdmft_exchange_operator))
 
   if(der%mesh%sb%kpoints%reduced%npoints > 1) call messages_not_implemented("exchange operator with k-points")
 
+  SAFE_ALLOCATE(psi(1:der%mesh%np, 1:hm%d%dim))
+  SAFE_ALLOCATE(hpsi(1:der%mesh%np, 1:hm%d%dim))
   SAFE_ALLOCATE(rho(1:der%mesh%np))
   SAFE_ALLOCATE(pot(1:der%mesh%np))
   SAFE_ALLOCATE(psi1(1:der%mesh%np,1:hm%d%dim))
   SAFE_ALLOCATE(hpsi1(1:der%mesh%np))
 
-  hpsi1 = R_TOTYPE(M_ZERO)
+  do ibatch = 1, psib%nst
+    ist = psib%states(ibatch)%ist
+    call batch_get_state(psib, ibatch, der%mesh%np, psi)
+    call batch_get_state(hpsib, ibatch, der%mesh%np, hpsi)
 
-  do jst = 1,hm%hf_st%nst
-    pot = R_TOTYPE(M_ZERO)
-    psi1 = M_ZERO
-    rho = R_TOTYPE(M_ZERO)
-    call states_get_state(hm%hf_st, der%mesh, jst, 1 , psi1)
+    hpsi1 = R_TOTYPE(M_ZERO)
+
+    do jst = 1,hm%hf_st%nst
+      pot = R_TOTYPE(M_ZERO)
+      psi1 = M_ZERO
+      rho = R_TOTYPE(M_ZERO)
+      call states_get_state(hm%hf_st, der%mesh, jst, 1 , psi1)
+      forall(ip = 1:der%mesh%np)
+        rho(ip) =  R_CONJ(psi(ip, 1))*psi1(ip, 1)
+      end forall
+      call X(poisson_solve)(psolver, pot, rho)
+      forall(ip = 1:der%mesh%np)
+        pot(ip) = pot(ip)*R_CONJ(psi1(ip, 1))*sqrt(hm%hf_st%occ(jst, 1)) !Mueller functional
+      end forall
+      forall(ip = 1:der%mesh%np)
+        hpsi1(ip) = hpsi1(ip) - pot(ip)
+      end forall
+    end do
+
     forall(ip = 1:der%mesh%np)
-      rho(ip) =  R_CONJ(psi(ip,1))*psi1(ip, 1)
+      hpsi(ip, hm%d%ispin) = hpsi1(ip)
     end forall
-    call X(poisson_solve)(psolver, pot, rho)
-    forall(ip = 1:der%mesh%np)
-      pot(ip) = pot(ip)*R_CONJ(psi1(ip,1))*sqrt(hm%hf_st%occ(jst, 1)) !Mueller functional
-    end forall
-    forall(ip = 1:der%mesh%np)
-      hpsi1(ip) = hpsi1(ip) - pot(ip)
-    end forall
+
+    call batch_set_state(hpsib, ibatch, der%mesh%np, hpsi)
+
   end do
 
-  forall(ip = 1:der%mesh%np)
-    hpsi(ip,hm%d%ispin)=hpsi1(ip)
-  end forall
-
+  SAFE_DEALLOCATE_A(psi)
+  SAFE_DEALLOCATE_A(hpsi)
   SAFE_DEALLOCATE_A(rho)
   SAFE_DEALLOCATE_A(pot)
   SAFE_DEALLOCATE_A(psi1)

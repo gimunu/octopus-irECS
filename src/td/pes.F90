@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: pes.F90 14767 2015-11-12 16:46:11Z philipp $
+!! $Id: pes.F90 14976 2016-01-05 14:27:54Z xavier $
 
 #include "global.h"
 
@@ -235,7 +235,7 @@ contains
     PUSH_SUB(pes_output)
     
     if(mpi_grp_is_root(mpi_world)) then
-      if(pes%calc_spm) call pes_spm_output(pes%spm, st, iter, dt)
+      if(pes%calc_spm) call pes_spm_output(pes%spm, mesh, st, iter, dt)
     end if
 
     if(pes%calc_mask) call pes_mask_output (pes%mask, mesh, st,outp, "td.general/PESM", gr, geo,iter)
@@ -263,7 +263,7 @@ contains
       return
     end if
 
-    if (in_debug_mode) then
+    if (debug%info) then
       message(1) = "Debug: Writing PES restart."
       call messages_info(1)
     end if
@@ -280,7 +280,7 @@ contains
       call pes_spm_dump(restart, pes%spm, st, ierr)
     end if
 
-    if (in_debug_mode) then
+    if (debug%info) then
       message(1) = "Debug: Writing PES restart done."
       call messages_info(1)
     end if
@@ -307,7 +307,7 @@ contains
       return
     end if
 
-    if (in_debug_mode) then
+    if (debug%info) then
       message(1) = "Debug: Reading PES restart."
       call messages_info(1)
     end if
@@ -324,7 +324,7 @@ contains
       call pes_spm_load(restart, pes%spm, st, ierr)
     end if
 
-    if (in_debug_mode) then
+    if (debug%info) then
       message(1) = "Debug: Reading PES restart done."
       call messages_info(1)
     end if

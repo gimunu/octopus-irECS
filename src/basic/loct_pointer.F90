@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: loct_pointer.F90 10978 2013-07-11 15:28:46Z micael $
+!! $Id: loct_pointer.F90 14925 2015-12-30 05:09:14Z xavier $
 
 #include "global.h"
 
@@ -27,7 +27,9 @@ module loct_pointer_m
   implicit none
 
   private
-  public :: loct_pointer_copy
+  public ::                       &
+    loct_pointer_copy,           &
+    loct_allocatable_copy
 
   interface loct_pointer_copy
     module procedure sloct_pointer_copy_1
@@ -59,6 +61,37 @@ module loct_pointer_m
     module procedure lloct_pointer_copy_3
     module procedure lloct_pointer_copy_4
   end interface loct_pointer_copy
+  
+  interface loct_allocatable_copy
+    module procedure sloct_allocatable_copy_1
+    module procedure sloct_allocatable_copy_2
+    module procedure sloct_allocatable_copy_3
+    module procedure sloct_allocatable_copy_4
+    module procedure dloct_allocatable_copy_1
+    module procedure dloct_allocatable_copy_2
+    module procedure dloct_allocatable_copy_3
+    module procedure dloct_allocatable_copy_4
+    module procedure cloct_allocatable_copy_1
+    module procedure cloct_allocatable_copy_2
+    module procedure cloct_allocatable_copy_3
+    module procedure cloct_allocatable_copy_4
+    module procedure zloct_allocatable_copy_1
+    module procedure zloct_allocatable_copy_2
+    module procedure zloct_allocatable_copy_3
+    module procedure zloct_allocatable_copy_4
+    module procedure iloct_allocatable_copy_1
+    module procedure iloct_allocatable_copy_2
+    module procedure iloct_allocatable_copy_3
+    module procedure iloct_allocatable_copy_4
+    module procedure aloct_allocatable_copy_1
+    module procedure aloct_allocatable_copy_2
+    module procedure aloct_allocatable_copy_3
+    module procedure aloct_allocatable_copy_4
+    module procedure lloct_allocatable_copy_1
+    module procedure lloct_allocatable_copy_2
+    module procedure lloct_allocatable_copy_3
+    module procedure lloct_allocatable_copy_4
+  end interface loct_allocatable_copy
 
 contains
 
