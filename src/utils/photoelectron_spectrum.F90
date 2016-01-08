@@ -271,8 +271,6 @@ program photoelectron_spectrum
   end if  
 
 
-  write(message(1), '(a)') 'Read PES restart files.'
-  call messages_info(1)
 
   !%Variable PhotoelectronSpectrumOutput
   !%Type flag

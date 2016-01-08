@@ -305,6 +305,10 @@ subroutine pes_mask_map_from_states(restart, st, ll, pesK, krng, Lp, istin)
   ntodo = nkpt * nst 
   idone = 0 
   call loct_progress_bar(-1, ntodo)
+
+  write(message(1), '(a)') 'Read PES restart files.'
+  call messages_info(1)
+
   
   pesK = M_ZERO
   do ik = krng(1), krng(2)
