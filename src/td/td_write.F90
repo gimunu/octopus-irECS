@@ -20,8 +20,10 @@
 #include "global.h"
 
 module td_write_m
-  use iso_c_binding
+  use blas_m
+  use comm_m
   use excited_states_m
+  use iso_c_binding
   use gauge_field_m
   use geometry_m
   use global_m
@@ -95,7 +97,8 @@ module td_write_m
     OUT_ION_CH      = 16, &
     OUT_TOTAL_CURRENT = 17, &
     OUT_PARTIAL_CHARGES = 18, &
-    OUT_MAX         = 18
+    OUT_PROJ_KP     = 19, &
+    OUT_MAX         = 19
   
   type td_write_t
     private
@@ -235,6 +238,8 @@ contains
     !% Output the total current.
     !%Option partial_charges 131072
     !% Bader and Hirshfeld partial charges. The output file is called 'td.general/partial_charges'.
+    !%Option td_proj_kp 262144
+    !% (Experimental) Like td_occup but with easier access to k-point information.
     !%End
 
     default = 2**(OUT_MULTIPOLES - 1) +  2**(OUT_ENERGY - 1)
@@ -258,6 +263,7 @@ contains
     if(writ%out(OUT_ION_CH)%write) call messages_experimental('TDOutput = ionization_channels')
     if(writ%out(OUT_TOTAL_CURRENT)%write) call messages_experimental('TDOutput = total_current')
     if(writ%out(OUT_PARTIAL_CHARGES)%write) call messages_experimental('TDOutput = partial_charges')
+    if(writ%out(OUT_PROJ_KP)%write) call messages_experimental('TDOutput = td_proj_kp')
 
     !%Variable TDMultipoleLmax
     !%Type integer
@@ -349,6 +355,20 @@ contains
 
       call restart_end(restart_gs)
     end if
+
+    if(writ%out(OUT_PROJ_KP)%write) then
+      if (writ%out(OUT_PROJ)%write .or. writ%out(OUT_POPULATIONS)%write) then
+        message(1) = "Projections or populations conflicts with TDkpProject."
+        call messages_fatal(1)
+      end if
+      
+      ! make a copy of the states object with the same distribution layout as the td state object
+      call states_copy(writ%gs_st, st)
+      call restart_init(restart_gs, RESTART_PROJ, RESTART_TYPE_LOAD, gr%mesh%mpi_grp, ierr, mesh=gr%mesh)
+      call states_load(restart_gs, writ%gs_st, gr, ierr, label = ': gs for TDOutput')
+    end if
+
+
 
     ! Build the excited states...
     if(writ%out(OUT_POPULATIONS)%write) then
@@ -587,6 +607,9 @@ contains
     if(writ%out(OUT_PROJ)%write) &
       call td_write_proj(writ%out(OUT_PROJ)%handle, gr, geo, st, writ%gs_st, kick, iter)
 
+    if(writ%out(OUT_PROJ_KP)%write) &
+     call td_write_proj_kp(writ%out(OUT_PROJ)%handle, gr, st, writ%gs_st, iter)
+
     if(writ%out(OUT_COORDS)%write) &
       call td_write_coordinates(writ%out(OUT_COORDS)%handle, gr, geo, iter)
 
@@ -651,6 +674,7 @@ contains
     if(mpi_grp_is_root(mpi_world)) then
       do iout = 1, OUT_MAX
         if(iout == OUT_LASER) cycle
+        if(iout == OUT_PROJ_KP) cycle
         if(writ%out(iout)%write)  call write_iter_flush(writ%out(iout)%handle)
       end do
     end if
@@ -2121,6 +2145,147 @@ contains
     end subroutine distribute_projections
 
   end subroutine td_write_proj
+
+  subroutine td_write_proj_kp(out_proj_kp, gr, st, gs_st, iter)
+      type(c_ptr),       intent(inout) :: out_proj_kp
+      type(grid_t),      intent(inout) :: gr
+      type(states_t),    intent(in)    :: st
+      type(states_t),    intent(inout) :: gs_st
+      integer,           intent(in)    :: iter
+
+      CMPLX, allocatable :: proj(:,:), psi(:,:,:), gs_psi(:,:,:),  temp_state1(:,:), temp_state2(:,:)
+      FLOAT, allocatable :: norms(:)
+      character(len=80) :: aux, filename1, filename2
+      integer :: ik, ist, jst, file, idim
+      logical :: check_norm, kdotp
+
+      type(mesh_t) :: mesh
+      type(states_t) :: hm_st
+
+      PUSH_SUB(td_write_proj_kp)
+
+      if(.not.mod(iter,50) == 0) then
+         POP_SUB(td_write_proj_kp)
+         return
+      end if
+
+      mesh = gr%der%mesh
+
+
+      !%Variable TDCheckNormalization
+      !%Type logical
+      !%Default false
+      !%Section Time-Dependent::TD Output      
+      !%Description
+      !% Check normalization of td-states when projecting.
+      !%End
+      call parse_variable('TDCheckNormalization', .false., check_norm)
+      if(check_norm) then
+        SAFE_ALLOCATE(norms(1:st%nst))
+        SAFE_ALLOCATE(temp_state1(1:mesh%np,1:st%d%dim))
+        write(filename1,'(I10)') iter
+        filename1 = 'd.general/normalization_iter_'//trim(adjustl(filename1))
+        file = 4322
+        do ik=1,st%d%nik
+          norms(:) = M_ZERO
+          if(mpi_world%rank==0) then
+            write(filename2,'(I10)') ik
+            filename2 = trim(adjustl(filename1))//'_ik_'//trim(adjustl(filename2))
+            open(unit=file,file=filename2)
+          end if
+       
+         do ist=st%st_start,st%st_end
+           if(state_kpt_is_local(st, ist, ik)) then
+             call states_get_state(st, mesh, ist, ik,temp_state1 )
+             do idim=1,st%d%dim
+               norms(ist) = norms(ist) +  &
+                    dot_product(temp_state1(1:mesh%np,idim),temp_state1(1:mesh%np,idim))*mesh%volume_element
+             end do
+           endif
+         end do
+         call comm_allreduce(mpi_world%comm, norms)
+         ! write to file
+         if(mpi_world%rank==0) then
+           do ist=1,st%nst
+             write(file,'(I3,1x,e12.6)') ist, norms(ist)
+           end do
+           close(file)
+         endif
+       end do ! ik
+       SAFE_DEALLOCATE_A(temp_state1)
+       SAFE_DEALLOCATE_A(norms)
+       !
+       return
+       !
+      end if
+
+      write(filename1,'(I10)') iter
+      filename1 = 'td.general/projections_iter_'//trim(adjustl(filename1))
+      file = 4322
+
+      SAFE_ALLOCATE(proj(1:gs_st%nst, 1:gs_st%nst))
+      SAFE_ALLOCATE(psi(1:gs_st%nst,1:gs_st%d%dim,1:mesh%np))
+      SAFE_ALLOCATE(gs_psi(1:gs_st%nst,1:gs_st%d%dim,1:mesh%np))
+      SAFE_ALLOCATE(temp_state1(1:mesh%np,1:gs_st%d%dim))
+      do ik=1,gs_st%d%nik
+         psi(1:gs_st%nst, 1:gs_st%d%dim, 1:mesh%np)= M_ZERO
+         gs_psi(1:gs_st%nst, 1:gs_st%d%dim, 1:mesh%np)= M_ZERO
+         if(mpi_world%rank==0) then
+            write(filename2,'(I10)') ik
+            filename2 = trim(adjustl(filename1))//'_ik_'//trim(adjustl(filename2))
+            open(unit=file,file=filename2)
+            write(file,*) '# ground-state excited-state projection'
+         endif
+
+         do ist=gs_st%st_start,gs_st%st_end
+            if(state_kpt_is_local(gs_st, ist, ik)) then
+               call states_get_state(gs_st, mesh, ist, ik,temp_state1 )
+               do idim=1,gs_st%d%dim
+                  gs_psi(ist,idim,1:mesh%np) =  temp_state1(1:mesh%np,idim)
+               end do
+               call states_get_state(st, mesh, ist, ik,temp_state1 )
+               do idim=1,gs_st%d%dim
+                  psi(ist,idim,1:mesh%np) =temp_state1(1:mesh%np,idim)
+               end do
+           end if
+         end do
+         call comm_allreduce(mpi_world%comm, gs_psi)
+         call comm_allreduce(mpi_world%comm, psi)
+
+         proj(1:gs_st%nst,1:gs_st%nst) = M_ZERO
+         call zgemm(transa = 'n',                             &
+                   transb = 'c',                              &
+                   m = gs_st%nst,                             &
+                   n = gs_st%nst,                             &
+                   k = mesh%np_global*gs_st%d%dim,            &
+                   alpha = cmplx(mesh%volume_element,kind=8), &
+                   a = psi(1, 1, 1),                          &
+                   lda = ubound(psi, dim = 1),                &
+                   b = gs_psi(1, 1, 1),                       &
+                   ldb = ubound(gs_psi, dim = 1),             &
+                   beta = cmplx(0.,kind=8),                   &
+                   c = proj(1, 1),                            &
+                   ldc = ubound(proj, dim = 1))
+
+         ! write to file
+         if(mpi_world%rank==0) then
+            do ist=1,gs_st%nst
+               do jst=1,gs_st%nst
+                  write(file,'(I3,1x,I3,1x,e12.6,1x,e12.6,2x)') ist, jst, proj(ist,jst)
+               end do
+            end do
+            close(file)
+         endif
+      end do
+
+      SAFE_DEALLOCATE_A(proj)
+      SAFE_DEALLOCATE_A(psi)
+      SAFE_DEALLOCATE_A(gs_psi)
+      SAFE_DEALLOCATE_A(temp_state1)
+
+      POP_SUB(td_write_proj_kp)
+
+    end subroutine td_write_proj_kp
 
 
   ! ---------------------------------------------------------
