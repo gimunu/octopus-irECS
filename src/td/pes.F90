@@ -60,6 +60,8 @@ module pes_m
 
     logical :: calc_flux
     type(pes_flux_t) :: flux
+      
+    logical :: skip_restart 
     
   end type pes_t
 
@@ -181,6 +183,19 @@ contains
     if(pes%calc_spm .or. pes%calc_mask .or. pes%calc_flux) then 
       call messages_print_stress(stdout)
     end if 
+
+
+    !%Variable PhotoElectronSkipRestart
+    !%Type logical
+    !%Default false
+    !%Section Time-Dependent::PhotoElectronSpectrum
+    !%Description
+    !%This variable controls the method used for the calculation of
+    !%the photoelectron spectrum. You can specify more than one value
+    !%by giving them as a sum, for example:
+    !%End
+
+    call parse_variable('PhotoElectronSkipRestart', .false., pes%skip_restart)
 
     POP_SUB(pes_init)
   end subroutine pes_init
@@ -306,6 +321,14 @@ contains
       POP_SUB(pes_load)
       return
     end if
+    
+    if (pes%skip_restart) then
+      message(1) = "Info: Skipped reading PES restart info."
+      call messages_info(1)      
+      POP_SUB(pes_load)
+      return
+    end if
+    
 
     if (debug%info) then
       message(1) = "Debug: Reading PES restart."
