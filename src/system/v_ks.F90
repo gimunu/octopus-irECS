@@ -696,9 +696,13 @@ contains
       logical, intent(in)                :: cmplxscl
       type(hamiltonian_t), intent(in)    :: hm
 
-      integer        :: ip, ispin, ist
+      integer        :: ip, ispin, ist, ik, ib
       FLOAT, pointer :: vxc_sic(:,:),  Imvxc_sic(:, :), vh_sic(:), rho(:, :), Imrho(:, :), qsp(:)
       CMPLX, pointer :: zrho_total(:), zvh_sic(:)
+      type(density_calc_t) :: dens_calc
+        
+      character(len=80) :: filename
+      integer :: ierr  
       
       PUSH_SUB(add_adsic)
       
@@ -720,7 +724,85 @@ contains
       do ist = 1, st%nst
         qsp(:) = qsp(:)+ st%occ(ist, :) * st%d%kweights(:)
       end do
+      
+      if(simul_box_is_periodic(ks%gr%mesh%sb)) then
+        ! Calculate the correction using the k-dependent density
+        ! in each kpoint subsbace
+        call density_calc_init(dens_calc, st, ks%gr, rho)
 
+        do ik = st%d%kpt%start, st%d%kpt%end
+
+          rho(:,:) = M_ZERO
+          qsp = M_ZERO
+          
+          do ist = 1, st%nst
+            qsp(1) = qsp(1)+ st%occ(ist, ik) 
+          end do
+          print *, "qsp(1)= ", qsp(1),  "st%d%kweights(ik)", st%d%kweights(ik), "st%qtot ", st%qtot
+
+          
+          
+          do ib = st%group%block_start, st%group%block_end
+              call density_calc_accumulate(dens_calc, ik, st%group%psib(ib, ik))
+          end do
+
+
+          select case (st%d%ispin)
+          case (UNPOLARIZED, SPIN_POLARIZED)
+            ispin = states_dim_get_spin_index(st%d, ik)
+!             do ispin = 1, st%d%nspin
+!               if (qsp(ispin) == M_ZERO) cycle
+
+
+              vxc_sic = M_ZERO
+
+              rho(:, ispin) = rho(:, ispin) / qsp(1) * st%d%kweights(ik)
+              call xc_get_vxc(ks%gr%fine%der, ks%xc, &
+                   st, rho, st%d%ispin, -minval(st%eigenval(st%nst,:)), qsp(1), &
+                   vxc_sic)
+
+              ks%calc%vxc = ks%calc%vxc - vxc_sic* st%d%kweights(ik)
+
+              write(filename,'(i4.4)') ik
+              filename = trim("vxc_sic_ik")//filename
+              call dio_function_output(io_function_fill_how("AxisZ"), &
+                                      ".", filename,  ks%gr%mesh, rho(:,1), unit_one, ierr)
+
+!             end do
+
+          case (SPINORS)
+            !TODO
+          end select
+
+          vh_sic = M_ZERO
+!         forall(ip = 1:ks%gr%mesh%np) rho(ip, 1) = sum(rho(ip, 1:st%d%nspin))  ! spinless density
+          
+          write(filename,'(i4.4)') ik
+          filename = trim("rho_ik")//filename
+          call dio_function_output(io_function_fill_how("AxisZ"), &
+                                  ".", filename,  ks%gr%mesh, rho(:,1), unit_one, ierr)
+                                  
+          call dpoisson_solve(ks%hartree_solver, vh_sic, rho(:,1))
+
+          write(filename,'(i4.4)') ik
+          filename = trim("vh_ik")//filename
+          call dio_function_output(io_function_fill_how("AxisZ"), &
+                                  ".", filename,  ks%gr%mesh, rho(:,1), unit_one, ierr)
+
+    
+          forall(ip = 1:ks%gr%mesh%np) ks%calc%vxc(ip,:) = ks%calc%vxc(ip,:) - vh_sic(ip)* st%d%kweights(ik)
+
+        end do
+
+        call dio_function_output(io_function_fill_how("AxisZ"), &
+                                ".", "vxc",  ks%gr%mesh, ks%calc%vxc(:,1), unit_one, ierr)
+
+
+        call density_calc_end(dens_calc)
+
+
+      else
+        
       if(cmplxscl) then
         if (st%d%ispin /= UNPOLARIZED) then
           call messages_not_implemented('ADSIC with spin-polarization and complex scaling')
@@ -731,7 +813,7 @@ contains
         SAFE_ALLOCATE(Imrho(1:ks%gr%fine%mesh%np, 1:st%d%nspin))
         SAFE_ALLOCATE(Imvxc_sic(1:ks%gr%mesh%np, 1:st%d%nspin))
         SAFE_ALLOCATE(zvh_sic(1:ks%gr%mesh%np))
-        
+      
         do ispin = 1, st%d%nspin
           Imrho(:, ispin) = ks%calc%Imdensity(:, ispin) / qsp(ispin)
         end do
@@ -784,6 +866,8 @@ contains
         rho(:, 1) = ks%calc%total_density / st%qtot
         call dpoisson_solve(ks%hartree_solver, vh_sic, rho(:,1))
         forall(ip = 1:ks%gr%mesh%np) ks%calc%vxc(ip,:) = ks%calc%vxc(ip,:) - vh_sic(ip)
+      end if
+      
       end if
 
       SAFE_DEALLOCATE_P(vxc_sic)
