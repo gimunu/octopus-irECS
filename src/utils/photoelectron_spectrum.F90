@@ -156,8 +156,8 @@ program photoelectron_spectrum
       pvec = (/0,0,1/)
       
       pesout%what = OPTION__PHOTOELECTRONSPECTRUMOUTPUT__VELOCITY_MAP_CUT 
-      pesout%pol = (/0,1,0/) 
-      pesout%pvec = (/0,0,1/)
+      pesout%pol = pol
+      pesout%pvec = pvec
     end if
     if (sb%dim == 3) then 
       ! write the full ARPES in vtk format (this could be a big file)
@@ -165,7 +165,7 @@ program photoelectron_spectrum
       pol = (/0,0,1/) 
       
       pesout%what = OPTION__PHOTOELECTRONSPECTRUMOUTPUT__ARPES
-      pesout%pol = (/0,0,1/) 
+      pesout%pol = pol
     end if
     if (have_zweight_path) then
       ! In this case the output is well defined only on a path in reciprocal space
@@ -175,8 +175,8 @@ program photoelectron_spectrum
       pvec = (/0,1,0/)
 
       pesout%what = OPTION__PHOTOELECTRONSPECTRUMOUTPUT__VELOCITY_MAP_CUT
-      pesout%pol = (/0,0,1/) 
-      pesout%pvec = (/0,1,0/)
+      pesout%pol = pol 
+      pesout%pvec = pvec
     end if 
   end if
 
@@ -238,6 +238,7 @@ program photoelectron_spectrum
     call messages_info(1)
     ! Figure out the direction of the path - it must be along kx or ky only
     call get_kpath_direction(sb%kpoints, krng, kpth_dir, pvec)
+    pesout%pvec = pvec
     
     call write_kpoints_info(sb%kpoints, krng(1), krng(2))    
     call messages_print_stress(stdout)
