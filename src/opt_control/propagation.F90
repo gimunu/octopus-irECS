@@ -15,46 +15,48 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: propagation.F90 14976 2016-01-05 14:27:54Z xavier $
+!! $Id: propagation.F90 15376 2016-05-21 12:42:39Z huebener $
 
 #include "global.h"
 
-module propagation_m
-  use batch_m
-  use batch_ops_m
-  use controlfunction_m
-  use density_m
-  use energy_calc_m
-  use epot_m
-  use excited_states_m
-  use forces_m
-  use gauge_field_m
-  use geometry_m
-  use global_m
-  use grid_m
-  use hamiltonian_m
-  use io_m
-  use ion_dynamics_m 
-  use lasers_m
-  use loct_m
-  use mesh_m
-  use mesh_function_m
-  use messages_m
-  use mpi_m
-  use opt_control_state_m
-  use propagator_m
-  use propagator_base_m
-  use profiling_m
-  use restart_m
-  use species_m
-  use states_m
-  use states_restart_m
-  use system_m
-  use target_m
-  use td_m
-  use td_write_m
-  use v_ks_m
-  use varinfo_m
+module propagation_oct_m
+  use batch_oct_m
+  use batch_ops_oct_m
+  use boundary_op_oct_m
+  use controlfunction_oct_m
+  use density_oct_m
+  use energy_calc_oct_m
+  use epot_oct_m
+  use excited_states_oct_m
+  use forces_oct_m
+  use gauge_field_oct_m
+  use geometry_oct_m
+  use global_oct_m
+  use grid_oct_m
+  use hamiltonian_oct_m
+  use io_oct_m
+  use ion_dynamics_oct_m 
+  use lasers_oct_m
+  use loct_oct_m
+  use mesh_oct_m
+  use mesh_function_oct_m
+  use messages_oct_m
+  use mpi_oct_m
+  use oct_exchange_oct_m
+  use opt_control_state_oct_m
+  use propagator_oct_m
+  use propagator_base_oct_m
+  use profiling_oct_m
+  use restart_oct_m
+  use species_oct_m
+  use states_oct_m
+  use states_restart_oct_m
+  use system_oct_m
+  use target_oct_m
+  use td_oct_m
+  use td_write_oct_m
+  use v_ks_oct_m
+  use varinfo_oct_m
 
   implicit none
 
@@ -227,14 +229,14 @@ contains
       call v_ks_calc(sys%ks, hm, psi, sys%geo, time = istep*td%dt)
       call energy_calc_total(hm, sys%gr, psi)
 
-      if(hm%ab == MASK_ABSORBING) call zvmask(gr, hm, psi)
+      if(hm%bc%abtype == MASK_ABSORBING) call zvmask(gr, hm, psi)
 
       ! if td_target
       call target_tdcalc(tg, hm, gr, sys%geo, psi, istep, td%max_iter)
 
       ! only write in final run
       if(write_iter_) then
-        call td_write_iter(write_handler, gr, psi, hm, sys%geo, hm%ep%kick, td%dt, istep)
+        call td_write_iter(write_handler, gr, psi, hm, sys%geo, hm%ep%kick, td%dt, sys%ks, istep)
         ii = ii + 1 
         if(ii == sys%outp%output_interval+1 .or. istep == td%max_iter) then ! output
           if(istep == td%max_iter) sys%outp%output_interval = ii - 1
@@ -817,7 +819,7 @@ contains
 
     if( hm%theory_level /= INDEPENDENT_PARTICLES .and. (.not.ks%frozen_hxc) ) then
       call density_calc(st, gr, st%rho)
-      call hamiltonian_set_oct_exchange(hm, st, gr%mesh)
+      call oct_exchange_set(hm%oct_exchange, st, gr%mesh)
     end if
 
     call hamiltonian_adjoint(hm)
@@ -860,7 +862,7 @@ contains
     end if
 
     if(hm%theory_level /= INDEPENDENT_PARTICLES .and. (.not.ks%frozen_hxc) ) then
-      call hamiltonian_remove_oct_exchange(hm)
+      call oct_exchange_remove(hm%oct_exchange)
     end if
 
     call hamiltonian_not_adjoint(hm)
@@ -1237,7 +1239,7 @@ contains
   ! ---------------------------------------------------------
 
 
-end module propagation_m
+end module propagation_oct_m
 
 !! Local Variables:
 !! mode: f90

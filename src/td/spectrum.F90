@@ -15,31 +15,31 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: spectrum.F90 14763 2015-11-10 17:06:16Z jjornet $
+!! $Id: spectrum.F90 15203 2016-03-19 13:15:05Z xavier $
 
 #include "global.h"
 
-module spectrum_m
-  use batch_m
+module spectrum_oct_m
+  use batch_oct_m
   use iso_c_binding
-  use cmplxscl_m
-  use compressed_sensing_m
-  use fft_m
-  use global_m
-  use io_m
-  use kick_m
-  use lalg_adv_m
-  use loct_math_m
-  use math_m
-  use messages_m
-  use minimizer_m
-  use parser_m
-  use profiling_m
-  use string_m
-  use types_m
-  use unit_m
-  use unit_system_m
-  use varinfo_m
+  use cmplxscl_oct_m
+  use compressed_sensing_oct_m
+  use fft_oct_m
+  use global_oct_m
+  use io_oct_m
+  use kick_oct_m
+  use lalg_adv_oct_m
+  use loct_math_oct_m
+  use math_oct_m
+  use messages_oct_m
+  use minimizer_oct_m
+  use parser_oct_m
+  use profiling_oct_m
+  use string_oct_m
+  use types_oct_m
+  use unit_oct_m
+  use unit_system_oct_m
+  use varinfo_oct_m
 
   implicit none
 
@@ -685,7 +685,7 @@ contains
 
     SAFE_ALLOCATE(sf(0:no_e, nspin))
 
-    if (abs(kick%delta_strength) < 1.d-12) kick%delta_strength = M_ONE
+    if (abs(kick%delta_strength) < CNST(1e-12)) kick%delta_strength = M_ONE
     do ie = 0, no_e
       energy = ie * spectrum%energy_step
       forall(isp = 1:nspin) sf(ie, isp) = sum(sigma(ie, 1:3, isp)*kick%pol(1:3, kick%pol_dir))
@@ -2375,7 +2375,7 @@ contains
 
 
 
-end module spectrum_m
+end module spectrum_oct_m
 
 !! Local Variables:
 !! mode: f90

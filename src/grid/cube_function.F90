@@ -15,33 +15,29 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: cube_function.F90 14459 2015-07-24 07:05:49Z dannert $
+!! $Id: cube_function.F90 15474 2016-07-12 04:33:08Z xavier $
 
 #include "global.h"
 
-module cube_function_m
-  use cube_m
-#ifdef HAVE_OPENCL
-  use cl
-#endif
-  use fft_m
-  use global_m
-  use index_m
-  use math_m
-  use mesh_m
-  use mesh_cube_map_m
-  use mesh_cube_parallel_map_m
-  use messages_m
-  use mpi_m
-  use mpi_debug_m
-  use octcl_kernel_m
-  use opencl_m
-  use parser_m
-  use partition_transfer_m
-  use par_vec_m
-  use profiling_m
-  use simul_box_m
-  use types_m
+module cube_function_oct_m
+  use accel_oct_m
+  use cube_oct_m
+  use fft_oct_m
+  use global_oct_m
+  use index_oct_m
+  use math_oct_m
+  use mesh_oct_m
+  use mesh_cube_map_oct_m
+  use mesh_cube_parallel_map_oct_m
+  use messages_oct_m
+  use mpi_oct_m
+  use mpi_debug_oct_m
+  use parser_oct_m
+  use partition_transfer_oct_m
+  use par_vec_oct_m
+  use profiling_oct_m
+  use simul_box_oct_m
+  use types_oct_m
 
   implicit none
   private
@@ -71,8 +67,8 @@ module cube_function_m
     CMPLX, pointer :: FS(:, :, :)   !< Fourier-space grid
     logical            :: forced_alloc !< Forced to be allocated even when PFFT is associated with the cube
     logical            :: in_device_memory
-    type(opencl_mem_t) :: real_space_buffer
-    type(opencl_mem_t) :: fourier_space_buffer
+    type(accel_mem_t) :: real_space_buffer
+    type(accel_mem_t) :: fourier_space_buffer
   end type cube_function_t
 
   type(profile_t), save :: prof_m2c, prof_c2m
@@ -190,7 +186,7 @@ contains
 #include "complex.F90"
 #include "cube_function_inc.F90"
 
-end module cube_function_m
+end module cube_function_oct_m
 
 
 !! Local Variables:

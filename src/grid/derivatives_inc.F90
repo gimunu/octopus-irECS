@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: derivatives_inc.F90 14831 2015-11-27 09:07:53Z xavier $
+!! $Id: derivatives_inc.F90 15591 2016-08-23 17:36:25Z ssato $
 
 !> This module calculates the derivatives (gradients, Laplacians, etc.) 
 !! of a function. Note that the function whose derivative is to be calculated
@@ -194,7 +194,7 @@ subroutine X(derivatives_grad)(der, ff, op_ff, ghost_update, set_bc)
   logical, optional,   intent(in)    :: ghost_update
   logical, optional,   intent(in)    :: set_bc
 
-  integer :: idir
+  integer :: idir,ip
   logical :: set_bc_, ghost_update_
   
   PUSH_SUB(X(derivatives_grad))
@@ -211,6 +211,13 @@ subroutine X(derivatives_grad)(der, ff, op_ff, ghost_update, set_bc)
     set_bc_       = .false. ! there is no need to update again
     ghost_update_ = .false. ! the boundary or ghost points
   end do
+
+  ! Grad_xyw = Bt Grad_uvw, see Chelikowsky after Eq. 10
+  if (simul_box_is_periodic(der%mesh%sb) .and. der%mesh%sb%nonorthogonal ) then
+    forall (ip = 1:der%mesh%np)
+      op_ff(ip, 1:der%dim) = matmul(der%mesh%sb%klattice_primitive(1:der%dim, 1:der%dim),op_ff(ip, 1:der%dim))
+    end forall
+  end if
 
   call profiling_out(gradient_prof)
   POP_SUB(X(derivatives_grad))

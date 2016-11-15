@@ -15,18 +15,18 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: math.F90 14362 2015-06-24 17:02:22Z xavier $
+!! $Id: math.F90 15323 2016-05-02 02:54:12Z xavier $
 
 #include "global.h"
 
 !> This module is intended to contain "only mathematical" functions
 !! and procedures.
-module math_m
-  use global_m
-  use lalg_basic_m
-  use loct_math_m
-  use messages_m
-  use profiling_m
+module math_oct_m
+  use global_oct_m
+  use lalg_basic_oct_m
+  use loct_math_oct_m
+  use messages_oct_m
+  use profiling_oct_m
 
   implicit none
 
@@ -42,7 +42,6 @@ module math_m
     zdot_product,               &
     is_integer_multiple,        &
     divides,                    &
-    quickrnd,                   &
     ylmr,                       &
     grylmr,                     &
     weights,                    &
@@ -189,24 +188,6 @@ contains
       fac = n*factorial(n-1)
     end if
   end function factorial
-
-
-  ! ---------------------------------------------------------
-  !> a simple congruent random number generator
-  subroutine quickrnd(iseed, rnd)
-    integer, intent(inout) :: iseed
-    FLOAT,   intent(inout) :: rnd
-
-    integer, parameter :: im=6075, ia=106, ic=1283
-
-    PUSH_SUB(quickrnd)
-
-    iseed = mod(iseed*ia + ic, im)
-    rnd = real(iseed, REAL_PRECISION)/real(im, REAL_PRECISION)
-
-    POP_SUB(quickrnd)
-  end subroutine quickrnd
-
 
   ! ---------------------------------------------------------
   !> Computes spherical harmonics ylm at position (x, y, z)
@@ -1144,7 +1125,7 @@ contains
 #include "real.F90"
 #include "math_inc.F90"
 
-end module math_m
+end module math_oct_m
 
 !! Local Variables:
 !! mode: f90

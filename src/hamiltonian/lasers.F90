@@ -15,25 +15,25 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: lasers.F90 14398 2015-06-30 10:44:19Z micael $
+!! $Id: lasers.F90 15203 2016-03-19 13:15:05Z xavier $
 
 #include "global.h"
 
-module lasers_m
-  use derivatives_m
-  use global_m
-  use mpi_m
-  use grid_m
-  use io_m
-  use parser_m
-  use mesh_m
-  use messages_m
-  use profiling_m
-  use simul_box_m
-  use states_dim_m
-  use unit_m
-  use unit_system_m
-  use tdfunction_m
+module lasers_oct_m
+  use derivatives_oct_m
+  use global_oct_m
+  use mpi_oct_m
+  use grid_oct_m
+  use io_oct_m
+  use parser_oct_m
+  use mesh_oct_m
+  use messages_oct_m
+  use profiling_oct_m
+  use simul_box_oct_m
+  use states_dim_oct_m
+  use unit_oct_m
+  use unit_system_oct_m
+  use tdfunction_oct_m
 
   implicit none
 
@@ -264,6 +264,10 @@ contains
     !%Description
     !% The block <tt>TDExternalFields</tt> describes the type and shape of time-dependent 
     !% external perturbations that are applied to the system.
+    !%
+    !% Note: This perturbations are only applied for time-dependent runs. If
+    !% you want the value of the perturbation at time zero to be
+    !% applied for time-independent runs, use <tt>TimeZero = yes</tt>.
     !%
     !% Each line of the block describes an external field; this way you can actually have more
     !% than one laser (<i>e.g.</i> a "pump" and a "probe").
@@ -709,7 +713,7 @@ contains
 #include "complex.F90"
 #include "lasers_inc.F90"
 
-end module lasers_m
+end module lasers_oct_m
 
 !! Local Variables:
 !! mode: f90

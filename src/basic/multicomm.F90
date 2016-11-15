@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: multicomm.F90 14976 2016-01-05 14:27:54Z xavier $
+!! $Id: multicomm.F90 15414 2016-06-16 12:29:43Z xavier $
 
 #include "global.h"
 
@@ -48,19 +48,19 @@
 !! You can use the routine multicomm_strategy_is_parallel to know if a certain
 !! index is parallelized.
 
-module multicomm_m
-  use global_m
-  use io_m
-  use loct_m
-  use messages_m
-  use mpi_m
+module multicomm_oct_m
+  use global_oct_m
+  use io_oct_m
+  use loct_oct_m
+  use messages_oct_m
+  use mpi_oct_m
 #if defined(HAVE_OPENMP)
   use omp_lib
 #endif
-  use parser_m
-  use profiling_m
-  use utils_m
-  use varinfo_m
+  use parser_oct_m
+  use profiling_oct_m
+  use utils_oct_m
+  use varinfo_oct_m
   
   implicit none
   
@@ -117,9 +117,9 @@ module multicomm_m
 
     integer          :: par_strategy     !< What kind of parallelization strategy should we use?
 
-    integer, pointer :: group_sizes(:)   !< Number of processors in each group.
-    integer, pointer :: who_am_i(:)      !< Rank in the "line"-communicators.
-    integer, pointer :: group_comm(:)    !< "Line"-communicators I belong to.
+    integer, allocatable :: group_sizes(:)   !< Number of processors in each group.
+    integer, allocatable :: who_am_i(:)      !< Rank in the "line"-communicators.
+    integer, allocatable :: group_comm(:)    !< "Line"-communicators I belong to.
     integer          :: dom_st_comm      !< States-domain plane communicator.
     integer          :: st_kpt_comm      !< Kpoints-states plane communicator.
     integer          :: dom_st_kpt_comm  !< Kpoints-states-domain cube communicator.
@@ -289,7 +289,6 @@ contains
 
     call strategy()
 
-    nullify(mc%group_sizes)
     mc%have_slaves = .false.
 
     if(mc%par_strategy /= P_STRATEGY_SERIAL) then
@@ -750,14 +749,14 @@ contains
   
 
   ! ---------------------------------------------------------
-    subroutine multicomm_end(mc)
-      type(multicomm_t), intent(inout) :: mc
-
+  subroutine multicomm_end(mc)
+    type(multicomm_t), intent(inout) :: mc
+    
 #if defined(HAVE_MPI)
-      integer :: ii
+    integer :: ii
 #endif
-
-      PUSH_SUB(multicomm_end)
+    
+    PUSH_SUB(multicomm_end)
 
     if(mc%par_strategy /= P_STRATEGY_SERIAL) then
 #if defined(HAVE_MPI)
@@ -771,18 +770,17 @@ contains
       call MPI_Comm_free(mc%dom_st_kpt_comm, mpi_err)
       call MPI_Comm_free(mc%full_comm, mpi_err)
       call MPI_Comm_free(mc%master_comm, mpi_err)
-
+      
 #ifdef HAVE_MPI2
       if(multicomm_have_slaves(mc)) call MPI_Comm_free(mc%slave_intercomm, mpi_err)
 #endif
-
+      
 #endif
-      ! Deallocate the rest of the arrays.
-      SAFE_DEALLOCATE_P(mc%group_sizes)
     end if
 
-    SAFE_DEALLOCATE_P(mc%group_comm)
-    SAFE_DEALLOCATE_P(mc%who_am_i)
+    SAFE_DEALLOCATE_A(mc%group_sizes)
+    SAFE_DEALLOCATE_A(mc%group_comm)
+    SAFE_DEALLOCATE_A(mc%who_am_i)
     
     POP_SUB(multicomm_end)
   end subroutine multicomm_end
@@ -1020,7 +1018,7 @@ contains
     have_slaves = this%have_slaves
   end function multicomm_have_slaves
 
-end module multicomm_m
+end module multicomm_oct_m
 
 
 !! Local Variables:

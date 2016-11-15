@@ -15,37 +15,34 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: propagator_etrs.F90 14692 2015-10-23 00:01:40Z xavier $
+!! $Id: propagator_etrs.F90 15698 2016-10-28 12:49:03Z nicolastd $
 
 #include "global.h"
 
-module propagator_etrs_m
-#ifdef HAVE_OPENCL
-  use cl
-#endif
-  use batch_m
-  use batch_ops_m
-  use density_m
-  use exponential_m
-  use gauge_field_m
-  use grid_m
-  use geometry_m
-  use global_m
-  use hamiltonian_m
-  use ion_dynamics_m
-  use lalg_basic_m
-  use loct_pointer_m
-  use math_m
-  use messages_m
-  use mesh_function_m
-  use opencl_m
-  use potential_interpolation_m
-  use profiling_m
-  use propagator_base_m
-  use states_dim_m
-  use states_m
-  use types_m
-  use v_ks_m
+module propagator_etrs_oct_m
+  use accel_oct_m
+  use batch_oct_m
+  use batch_ops_oct_m
+  use density_oct_m
+  use exponential_oct_m
+  use gauge_field_oct_m
+  use grid_oct_m
+  use geometry_oct_m
+  use global_oct_m
+  use hamiltonian_oct_m
+  use ion_dynamics_oct_m
+  use lalg_basic_oct_m
+  use loct_pointer_oct_m
+  use math_oct_m
+  use messages_oct_m
+  use mesh_function_oct_m
+  use potential_interpolation_oct_m
+  use profiling_oct_m
+  use propagator_base_oct_m
+  use states_dim_oct_m
+  use states_oct_m
+  use types_oct_m
+  use v_ks_oct_m
 
   implicit none
 
@@ -60,7 +57,7 @@ contains
 
   ! ---------------------------------------------------------
   !> Propagator with enforced time-reversal symmetry
-  subroutine td_etrs(ks, hm, gr, st, tr, time, dt, ionic_scale, ions, geo, move_ions, gauge_force)
+  subroutine td_etrs(ks, hm, gr, st, tr, time, dt, ionic_scale, ions, geo, move_ions)
     type(v_ks_t), target,            intent(inout) :: ks
     type(hamiltonian_t), target,     intent(inout) :: hm
     type(grid_t),        target,     intent(inout) :: gr
@@ -72,7 +69,6 @@ contains
     type(ion_dynamics_t),            intent(inout) :: ions
     type(geometry_t),                intent(inout) :: geo
     logical,                         intent(in)    :: move_ions
-    type(gauge_force_t),  optional,  intent(inout) :: gauge_force
 
     FLOAT, allocatable :: vhxc_t1(:,:), vhxc_t2(:,:)
     integer :: ik, ib
@@ -109,7 +105,7 @@ contains
 
       call density_calc_end(dens_calc)
 
-      call v_ks_calc(ks, hm, st, geo)
+      call v_ks_calc(ks, hm, st, geo, calc_current = gauge_field_is_applied(hm%ep%gfield))
 
       call lalg_copy(gr%mesh%np, st%d%nspin, hm%vhxc, vhxc_t2)
       call lalg_copy(gr%mesh%np, st%d%nspin, vhxc_t1, hm%vhxc)
@@ -135,7 +131,7 @@ contains
     end if
 
     if(gauge_field_is_applied(hm%ep%gfield)) then
-      call gauge_field_propagate(hm%ep%gfield, gauge_force, dt)
+      call gauge_field_propagate(hm%ep%gfield, dt, time)
     end if
 
     if(hm%theory_level /= INDEPENDENT_PARTICLES) then
@@ -165,7 +161,7 @@ contains
 
   ! ---------------------------------------------------------
   !> Propagator with enforced time-reversal symmetry and self-consistency
-  subroutine td_etrs_sc(ks, hm, gr, st, tr, time, dt, ionic_scale, ions, geo, move_ions, sctol, gauge_force, scsteps)
+  subroutine td_etrs_sc(ks, hm, gr, st, tr, time, dt, ionic_scale, ions, geo, move_ions, sctol, scsteps)
     type(v_ks_t), target,            intent(inout) :: ks
     type(hamiltonian_t), target,     intent(inout) :: hm
     type(grid_t),        target,     intent(inout) :: gr
@@ -178,7 +174,6 @@ contains
     type(geometry_t),                intent(inout) :: geo
     logical,                         intent(in)    :: move_ions
     FLOAT,                           intent(in)    :: sctol
-    type(gauge_force_t),  optional,  intent(inout) :: gauge_force
     integer,              optional,  intent(out)   :: scsteps
 
     FLOAT :: diff
@@ -224,7 +219,7 @@ contains
 
     call density_calc_end(dens_calc)
 
-    call v_ks_calc(ks, hm, st, geo)
+    call v_ks_calc(ks, hm, st, geo, calc_current = gauge_field_is_applied(hm%ep%gfield))
 
     call lalg_copy(gr%mesh%np, st%d%nspin, hm%vhxc, vhxc_t2)
     call lalg_copy(gr%mesh%np, st%d%nspin, vhxc_t1, hm%vhxc)
@@ -239,7 +234,7 @@ contains
     end if
 
     if(gauge_field_is_applied(hm%ep%gfield)) then
-      call gauge_field_propagate(hm%ep%gfield, gauge_force, dt)
+      call gauge_field_propagate(hm%ep%gfield, dt, time)
     end if
 
     if(hm%theory_level /= INDEPENDENT_PARTICLES) then
@@ -275,7 +270,7 @@ contains
         call density_calc(st, gr, st%zrho%Re, st%zrho%Im)
       end if
 
-      call v_ks_calc(ks, hm, st, geo, time = time)
+      call v_ks_calc(ks, hm, st, geo, time = time, calc_current = gauge_field_is_applied(hm%ep%gfield))
 
       ! now check how much the potential changed
       do ip = 1, gr%mesh%np
@@ -323,7 +318,7 @@ contains
 
   ! ---------------------------------------------------------
   !> Propagator with approximate enforced time-reversal symmetry
-  subroutine td_aetrs(ks, hm, gr, st, tr, time, dt, ionic_scale, ions, geo, move_ions, gauge_force)
+  subroutine td_aetrs(ks, hm, gr, st, tr, time, dt, ionic_scale, ions, geo, move_ions)
     type(v_ks_t), target,            intent(inout) :: ks
     type(hamiltonian_t), target,     intent(inout) :: hm
     type(grid_t),        target,     intent(inout) :: gr
@@ -335,7 +330,6 @@ contains
     type(ion_dynamics_t),            intent(inout) :: ions
     type(geometry_t),                intent(inout) :: geo
     logical,                         intent(in)    :: move_ions
-    type(gauge_force_t),  optional,  intent(inout) :: gauge_force
 
     integer :: ik, ispin, ip, ist, ib
     FLOAT :: vv
@@ -344,7 +338,7 @@ contains
     type(profile_t), save :: phase_prof
     integer               :: pnp, iprange
     FLOAT, allocatable    :: vold(:, :), imvold(:, :)
-    type(opencl_mem_t)    :: phase_buff
+    type(accel_mem_t)    :: phase_buff
 
     PUSH_SUB(td_aetrs)
 
@@ -359,7 +353,8 @@ contains
       call lalg_copy(gr%mesh%np, st%d%nspin, vold, hm%vhxc)
       if(hm%cmplxscl%space) call lalg_copy(gr%mesh%np, st%d%nspin, Imvold, hm%Imvhxc)
       call hamiltonian_update(hm, gr%mesh, time = time - dt)
-      call v_ks_calc_start(ks, hm, st, geo, time = time - dt, calc_energy = .false.)
+      call v_ks_calc_start(ks, hm, st, geo, time = time - dt, calc_energy = .false., &
+             calc_current = gauge_field_is_applied(hm%ep%gfield))
     end if
 
     ! propagate half of the time step with H(time - dt)
@@ -381,15 +376,13 @@ contains
       end forall
 
       ! copy vold to a cl buffer
-      if(opencl_is_enabled() .and. hamiltonian_apply_packed(hm, gr%mesh)) then
-#ifdef HAVE_OPENCL
-        pnp = opencl_padded_size(gr%mesh%np)
-        call opencl_create_buffer(phase_buff, CL_MEM_READ_ONLY, TYPE_FLOAT, pnp*st%d%nspin)
+      if(accel_is_enabled() .and. hamiltonian_apply_packed(hm, gr%mesh)) then
+        pnp = accel_padded_size(gr%mesh%np)
+        call accel_create_buffer(phase_buff, ACCEL_MEM_READ_ONLY, TYPE_FLOAT, pnp*st%d%nspin)
         ASSERT(ubound(vold, dim = 1) == gr%mesh%np)
         do ispin = 1, st%d%nspin
-          call opencl_write_buffer(phase_buff, gr%mesh%np, vold(:, ispin), offset = (ispin - 1)*pnp)
+          call accel_write_buffer(phase_buff, gr%mesh%np, vold(:, ispin), offset = (ispin - 1)*pnp)
         end do
-#endif
       end if
 
     end if
@@ -403,7 +396,7 @@ contains
     end if
 
     if(gauge_field_is_applied(hm%ep%gfield)) then
-      call gauge_field_propagate(hm%ep%gfield, gauge_force, dt)
+      call gauge_field_propagate(hm%ep%gfield, dt, time)
     end if
 
     call hamiltonian_update(hm, gr%mesh, time = time)
@@ -437,17 +430,15 @@ contains
               end forall
             end do
           case(BATCH_CL_PACKED)
-#ifdef HAVE_OPENCL
-            call opencl_set_kernel_arg(kernel_phase, 0, pnp*(ispin - 1))
-            call opencl_set_kernel_arg(kernel_phase, 1, phase_buff)
-            call opencl_set_kernel_arg(kernel_phase, 2, st%group%psib(ib, ik)%pack%buffer)
-            call opencl_set_kernel_arg(kernel_phase, 3, log2(st%group%psib(ib, ik)%pack%size(1)))
+            call accel_set_kernel_arg(kernel_phase, 0, pnp*(ispin - 1))
+            call accel_set_kernel_arg(kernel_phase, 1, phase_buff)
+            call accel_set_kernel_arg(kernel_phase, 2, st%group%psib(ib, ik)%pack%buffer)
+            call accel_set_kernel_arg(kernel_phase, 3, log2(st%group%psib(ib, ik)%pack%size(1)))
 
-            iprange = opencl_max_workgroup_size()/st%group%psib(ib, ik)%pack%size(1)
+            iprange = accel_max_workgroup_size()/st%group%psib(ib, ik)%pack%size(1)
 
-            call opencl_kernel_run(kernel_phase, (/st%group%psib(ib, ik)%pack%size(1), pnp/), &
+            call accel_kernel_run(kernel_phase, (/st%group%psib(ib, ik)%pack%size(1), pnp/), &
               (/st%group%psib(ib, ik)%pack%size(1), iprange/))
-#endif
           end select
           call profiling_out(phase_prof)
         end if
@@ -459,11 +450,9 @@ contains
       end do
     end do
 
-#ifdef HAVE_OPENCL
-    if(tr%method == PROP_CAETRS .and. opencl_is_enabled() .and. hamiltonian_apply_packed(hm, gr%mesh)) then
-      call opencl_release_buffer(phase_buff)
+    if(tr%method == PROP_CAETRS .and. accel_is_enabled() .and. hamiltonian_apply_packed(hm, gr%mesh)) then
+      call accel_release_buffer(phase_buff)
     end if
-#endif
 
     call density_calc_end(dens_calc)
 
@@ -474,7 +463,7 @@ contains
     POP_SUB(td_aetrs)
   end subroutine td_aetrs
 
-end module propagator_etrs_m
+end module propagator_etrs_oct_m
 
 !! Local Variables:
 !! mode: f90

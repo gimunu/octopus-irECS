@@ -15,21 +15,21 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: symmetries.F90 14695 2015-10-23 10:19:48Z jrfsousa $
+!! $Id: symmetries.F90 15649 2016-10-14 10:35:36Z nicolastd $
 
 #include "global.h"
 
-module symmetries_m
-  use geometry_m
-  use global_m
-  use messages_m
-  use mpi_m
-  use parser_m
-  use profiling_m
-  use species_m
-  use symm_op_m
+module symmetries_oct_m
+  use geometry_oct_m
+  use global_oct_m
+  use messages_oct_m
+  use mpi_oct_m
+  use parser_oct_m
+  use profiling_oct_m
+  use species_oct_m
+  use symm_op_oct_m
   use spglib_f08
-  use lalg_adv_m
+  use lalg_adv_oct_m
 
 
   implicit none
@@ -49,7 +49,7 @@ module symmetries_m
     symmetries_identity_index
 
   type symmetries_t
-    type(symm_op_t), pointer :: ops(:)
+    type(symm_op_t), allocatable :: ops(:)
     integer                  :: nops
     FLOAT                    :: breakdir(1:3)
     integer                  :: space_group
@@ -62,7 +62,7 @@ module symmetries_m
     subroutine symmetries_finite_init(natoms, types, positions, verbosity, point_group)
       integer, intent(in)  :: natoms
       integer, intent(in)  :: types !< (natoms)
-      real*8,  intent(in)  :: positions !< (3, natoms)
+      real(8), intent(in)  :: positions !< (3, natoms)
       integer, intent(in)  :: verbosity
       integer, intent(out) :: point_group
     end subroutine symmetries_finite_init
@@ -86,7 +86,6 @@ contains
   elemental subroutine symmetries_nullify(this)
     type(symmetries_t), intent(out) :: this
 
-    nullify(this%ops)
     this%nops = 0
     this%breakdir = M_ZERO
     this%space_group = 0
@@ -215,10 +214,15 @@ contains
       do iatom = 1, geo%natoms
         position(1:3, iatom) = M_HALF
         ! position here contains reduced coordinates
-        ! this should be matmul(klattice, geo atom x)
-        position(1:dim4syms, iatom) = matmul (klattice, geo%atom(iatom)%x(1:dim4syms)) + M_HALF
+        ! We thus convert geo%atom(iatom)%x to reduced coordinates.
+        ! Note that there M_TWO*M_PI here as this is not given by lalg_determinant. 
+        ! M_HALF is added to have reduced coordinates between 0 and 1, as used by spglib
+        position(1:dim4syms, iatom) = matmul (geo%atom(iatom)%x(1:dim4syms),klattice) + M_HALF
         typs(iatom) = species_index(geo%atom(iatom)%species)
       end do
+
+      ! transpose the lattice vectors for use in spglib as row-major matrix
+      lattice(:,:) = transpose(lattice(:,:))
 
       this%space_group = spglib_get_international(symbol, lattice(1, 1), position(1, 1), typs(1), geo%natoms, symprec)
 
@@ -308,6 +312,11 @@ contains
 
       SAFE_ALLOCATE(this%ops(1:fullnops))
 
+      ! NOTE: HH 21/05/2016
+      ! The below search for fractional translations doesnt seem to work for non-orthogonal cells,
+      ! but not critical as it just returns less useable symmetries...
+      ! FIXME
+
       ! check all operations and leave those that kept the symmetry-breaking
       ! direction invariant and (for the moment) that do not have a translation
       this%nops = 0
@@ -391,11 +400,14 @@ contains
 
     PUSH_SUB(symmetries_end)
 
-    do iop = 1, this%nops
-      call symm_op_end(this%ops(iop))
-    end do
+    if(allocated(this%ops)) then
+      do iop = 1, this%nops
+        call symm_op_end(this%ops(iop))
+      end do
 
-    SAFE_DEALLOCATE_P(this%ops)
+      SAFE_DEALLOCATE_A(this%ops)
+    end if
+    
     POP_SUB(symmetries_end)
   end subroutine symmetries_end
 
@@ -456,7 +468,7 @@ contains
 
   end function symmetries_identity_index
 
-end module symmetries_m
+end module symmetries_oct_m
 
 !! Local Variables:
 !! mode: f90

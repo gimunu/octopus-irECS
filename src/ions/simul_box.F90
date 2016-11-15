@@ -16,33 +16,33 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: simul_box.F90 14511 2015-08-13 10:51:33Z ravindra $
+!! $Id: simul_box.F90 15720 2016-11-07 18:20:27Z nicolastd $
 
 #include "global.h"
 
-module simul_box_m
-  use atom_m
-  use blas_m
+module simul_box_oct_m
+  use atom_oct_m
+  use blas_oct_m
   use iso_c_binding
-  use geometry_m
-  use global_m
-  use io_m
-  use kpoints_m
-  use lalg_basic_m
-  use loct_m
-  use lookup_m
-  use math_m
-  use messages_m
-  use mpi_m
-  use parser_m
-  use profiling_m
-  use space_m
-  use species_m
-  use string_m
-  use symmetries_m
-  use unit_m
-  use unit_system_m
-  use varinfo_m
+  use geometry_oct_m
+  use global_oct_m
+  use io_oct_m
+  use kpoints_oct_m
+  use lalg_basic_oct_m
+  use loct_oct_m
+  use lookup_oct_m
+  use math_oct_m
+  use messages_oct_m
+  use mpi_oct_m
+  use parser_oct_m
+  use profiling_oct_m
+  use space_oct_m
+  use species_oct_m
+  use string_oct_m
+  use symmetries_oct_m
+  use unit_oct_m
+  use unit_system_oct_m
+  use varinfo_oct_m
 
   implicit none
 
@@ -113,6 +113,7 @@ module simul_box_m
     FLOAT :: volume_element                      !< the volume element in real space
     FLOAT :: rcell_volume                        !< the volume of the cell in real space
     FLOAT :: metric            (MAX_DIM,MAX_DIM) !< metric tensor F matrix following Chelikowski paper PRB 78 075109 (2008)
+    FLOAT :: stress_tensor(MAX_DIM,MAX_DIM)   !< reciprocal-lattice primitive vectors
     logical :: nonorthogonal
     
     type(kpoints_t) :: kpoints                   !< the k-points
@@ -206,8 +207,8 @@ contains
         call messages_experimental('Support for mixed periodicity systems')
       end if
 
-      if(sb%periodic_dim == 1 .or. sb%periodic_dim == 2) then
-        call messages_write('For systems that  are periodic in 1D and  2D, interaction between', new_line = .true.)
+      if(sb%periodic_dim == 1) then
+        call messages_write('For systems that  are periodic in 1D, interaction between', new_line = .true.)
         call messages_write('ions is assumed to be periodic in 3D. This affects the calculation', new_line = .true.)
         call messages_write('of total energy and forces.')
         call messages_warning()
@@ -408,7 +409,6 @@ contains
         end if
 
         call parse_variable('Xlength', default, sb%xsize, units_inp%length)
-        sb%lsize(1) = sb%xsize
         if(def_rsize > M_ZERO .and. sb%periodic_dim == 0) &
           call messages_check_def(sb%xsize, .false., def_rsize, 'xlength', units_out%length)
       end if
@@ -458,9 +458,7 @@ contains
           sb%lsize(1:sb%dim) = sb%lsize(1)
         else
           message(1) = "Lsize was not found in input file. Continuing anyway."
-          message(2) = " NOTE that non-orthogonal unit cells are not working yet."
-          message(3) = " You have been warned"
-          call messages_warning(3)
+          call messages_warning(1)
         end if
       else
         ! if not a compatible box-shape
@@ -622,7 +620,7 @@ contains
     FLOAT,   optional, intent(in)    :: rlattice_primitive(:,:)
 
     type(block_t) :: blk
-    FLOAT :: norm, cross(1:3)
+    FLOAT :: norm, cross(1:3), lparams(3)
     integer :: idim, jdim
 
     PUSH_SUB(simul_box_build_lattice)
@@ -630,19 +628,46 @@ contains
     if(present(rlattice_primitive)) then
       sb%rlattice_primitive(1:sb%dim, 1:sb%dim) = rlattice_primitive(1:sb%dim, 1:sb%dim)
     else
+      
+      
+      !%Variable LatticeParameters
+      !%Type block
+      !%Default 1 | 1 | 1
+      !%Section Mesh::Simulation Box
+      !%Description
+      !% The lattice parameters (a, b, c). 
+      !% This option is incompatible with Lsize and either one of the 
+      !% two must be specified in the input file for periodic systems.
+      !%End
+      lparams(:) = M_ONE
+
+      if (parse_block('LatticeParameters', blk) == 0) then
+        do idim = 1, sb%dim
+            call parse_block_float(blk, 0, idim - 1, lparams(idim))
+        end do
+        call parse_block_end(blk)
+
+        if (parse_is_defined('Lsize')) then
+          message(1) = 'LatticeParameters is incompatible with Lsize'
+          call messages_print_var_info(stdout, "LatticeParameters")
+          call messages_fatal(1)
+        end if
+
+      end if
+
+            
       !%Variable LatticeVectors
       !%Type block
       !%Default simple cubic
       !%Section Mesh::Simulation Box
       !%Description
       !% (Experimental) Primitive lattice vectors. Vectors are stored in rows.
-      !% Note that these vectors will be normalized. Default:
+      !% Default:
       !% <br><br><tt>%LatticeVectors
       !% <br>&nbsp;&nbsp;1.0 | 0.0 | 0.0
       !% <br>&nbsp;&nbsp;0.0 | 1.0 | 0.0
       !% <br>&nbsp;&nbsp;0.0 | 0.0 | 1.0
       !% <br>%<br></tt>
-      !% Note: This version of Octopus should support non-orthogonal cells.
       !%End
       sb%rlattice_primitive = M_ZERO
       sb%nonorthogonal = .false.
@@ -660,16 +685,11 @@ contains
         if(sb%nonorthogonal) &
           call messages_experimental('Non-orthogonal unit cells')
         
-! check if Lsize is defined, if not, then set it to a/2, b/2, c/2
-        if (.not. parse_is_defined('Lsize')) then  
+        if (.not. parse_is_defined('Lsize')) then
           sb%lsize(:) = M_ZERO
-          sb%lsize(1:sb%dim) = M_HALF
-	else
-	  message(1) = 'Lsize is being declared along with Lattice Vectors:'
-          message(2) = ' this will multiply each vector by the corresponding lsize'
-          message(3) = ' For the default behavior set lsize = 0.5 | 0.5 | 0.5 '
-	  call messages_warning(3)
-        end if
+          sb%lsize(1:sb%dim) = lparams(1:sb%dim)*M_HALF
+        end if        
+        
       end if
 
     end if
@@ -683,34 +703,20 @@ contains
         sb%rlattice(jdim, idim) = sb%rlattice_primitive(jdim, idim) * M_TWO*sb%lsize(idim)
       end forall
     end do
-
-    select case(sb%dim)
-    case(3)
-      cross = dcross_product(sb%rlattice(:,2), sb%rlattice(:,3))
-      sb%rcell_volume = sum(sb%rlattice(1:3, 1)*cross(1:3))
-    case(2)
-      sb%rcell_volume = abs(sb%rlattice(1, 1)*sb%rlattice(2, 2) - sb%rlattice(1, 2)*sb%rlattice(2, 1))
-    case(1)
-      sb%rcell_volume = abs(sb%rlattice(2, 1) - sb%rlattice(1, 1))
-    case default
-      sb%rcell_volume = M_ONE
-      do idim = 1, sb%dim
-        sb%rcell_volume = sb%rcell_volume*abs(sb%rlattice(idim, idim))
-      end do
-    end select
-
-    call reciprocal_lattice(sb%rlattice, sb%klattice, sb%volume_element, sb%dim)
+    
+    call reciprocal_lattice(sb%rlattice, sb%klattice, sb%rcell_volume, sb%dim)
     sb%klattice = sb%klattice * M_TWO*M_PI
 
     call reciprocal_lattice(sb%rlattice_primitive, sb%klattice_primitive, sb%volume_element, sb%dim)
 
     sb%metric = M_ZERO
-    sb%metric = matmul(sb%klattice_primitive, transpose(sb%klattice_primitive))
+    sb%metric = matmul(transpose(sb%klattice_primitive), sb%klattice_primitive)
 
     ! rlattice_primitive is the A matrix from Chelikowski PRB 78 075109 (2008)
-    ! klattice_primitive is the B matrix, with no 2 pi factor included
+    ! klattice_primitive is the transpose (!) of the B matrix, with no 2 pi factor included
     ! klattice is the proper reciprocal lattice vectors, with 2 pi factor, and in units of 1/bohr
     ! metric is the F matrix of Chelikowski
+
 
     POP_SUB(simul_box_build_lattice)
   end subroutine simul_box_build_lattice
@@ -743,33 +749,7 @@ contains
 
     do iatom = 1, geo%natoms
 
-      if (simul_box_is_periodic(sb)) then
-        if(.not. geo%reduced_coordinates) then
-          !convert the position to the orthogonal space
-          xx(1:pd) = matmul(geo%atom(iatom)%x(1:pd), sb%klattice_primitive(1:pd, 1:pd))
-! TODO : change to klattice not primitive, and remove line below
-          xx(1:pd) = xx(1:pd)/(M_TWO*sb%lsize(1:pd))
-        else
-          ! in this case coordinates are already in reduced space
-          xx(1:pd) = geo%atom(iatom)%x(1:pd)
-        end if
-
-        xx(1:pd) = xx(1:pd) + M_HALF
-        do idir = 1, pd
-          if(xx(idir) >= M_ZERO) then
-            xx(idir) = xx(idir) - aint(xx(idir))
-          else
-            xx(idir) = xx(idir) - aint(xx(idir)) + M_ONE
-          end if
-        end do
-        ASSERT(all(xx(1:pd) >= M_ZERO))
-
-        ASSERT(all(xx(1:pd) < CNST(1.0)))
-        xx(1:pd) = (xx(1:pd) - M_HALF)*M_TWO*sb%lsize(1:pd) 
-! TODO : change to rlattice not primitive, and remove line above
-        geo%atom(iatom)%x(1:pd) = matmul(sb%klattice_primitive(1:pd, 1:pd), xx(1:pd))
-
-      end if
+      call simul_box_periodic_atom_in_box(sb, geo, geo%atom(iatom)%x(:))
 
       if(geo%reduced_coordinates) then
         geo%atom(iatom)%x(pd + 1:sb%dim) = M_TWO*sb%lsize(pd + 1:sb%dim)*geo%atom(iatom)%x(pd + 1:sb%dim)
@@ -798,7 +778,7 @@ contains
   
   subroutine simul_box_periodic_atom_in_box(sb, geo, ratom)
     type(simul_box_t), intent(in)    :: sb
-    type(geometry_t),  intent(inout) :: geo
+    type(geometry_t),  intent(in)    :: geo
     FLOAT,             intent(inout) :: ratom(:)
 
     FLOAT :: xx(1:MAX_DIM)
@@ -808,30 +788,28 @@ contains
 
     if (simul_box_is_periodic(sb)) then
       if(.not. geo%reduced_coordinates) then
-        !convert the position to the orthogonal space - does this mean reduced coordinates?
-        xx(1:pd) = matmul(ratom(1:pd), sb%klattice_primitive(1:pd, 1:pd))
-!TODO: change previous line to klattice (not prim) and remove next line
-        xx(1:pd) = xx(1:pd)/(M_TWO*sb%lsize(1:pd))
+        !convert the position to reduced coordinates
+         xx(1:pd) = matmul(ratom(1:pd), sb%klattice(1:pd, 1:pd))/(M_TWO*M_PI)
       else
         ! in this case coordinates are already in reduced space
         xx(1:pd) = ratom(1:pd)
       end if
-      
+
+
       xx(1:pd) = xx(1:pd) + M_HALF
       do idir = 1, pd
-        if(xx(idir) >= M_ZERO) then
-          xx(idir) = xx(idir) - aint(xx(idir))
-        else
-          xx(idir) = xx(idir) - aint(xx(idir)) + M_ONE
-        end if
+        xx(idir) = xx(idir) - anint(xx(idir))
+        if(xx(idir) < -CNST(1.0e-6)) &
+          xx(idir) = xx(idir) + M_ONE
       end do
       ASSERT(all(xx(1:pd) >= M_ZERO))
-      xx(1:pd) = (xx(1:pd) - M_HALF)*M_TWO*sb%lsize(1:pd) 
+      ASSERT(all(xx(1:pd) < CNST(1.0)))
 
-!TODO: change next line to rlattice (not prim) and remove previous line
-      ratom(1:pd) = matmul(sb%klattice_primitive(1:pd, 1:pd), xx(1:pd))
+      xx(1:pd) = (xx(1:pd) - M_HALF)
+      ratom(1:pd) = matmul(sb%rlattice(1:pd, 1:pd), xx(1:pd))
 
     end if
+    
 
   end subroutine simul_box_periodic_atom_in_box
 
@@ -1505,7 +1483,7 @@ contains
     POP_SUB(simul_box_min_distance)
   end function simul_box_min_distance
 
-end module simul_box_m
+end module simul_box_oct_m
 
 !! Local Variables:
 !! mode: f90

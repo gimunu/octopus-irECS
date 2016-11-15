@@ -16,7 +16,7 @@
 	Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 	02110-1301, USA.
 
-	$Id: parser_f.c 14183 2015-06-02 03:38:03Z dstrubbe $
+	$Id: parser_f.c 15737 2016-11-14 04:36:01Z dstrubbe $
 */
 
 #include <config.h>
@@ -96,16 +96,28 @@ void FC_FUNC_(oct_parse_putsym_complex, OCT_PARSE_PUTSYM_COMPLEX)
 
 /* --------------------------------------------------------- */
 int FC_FUNC_(oct_parse_input, OCT_PARSE_INPUT)
-	(STR_F_TYPE s STR_ARG1)
+       (STR_F_TYPE s, int *set_used STR_ARG1)
 {
   int r;
   char *s_c;
   
   TO_C_STR1(s, s_c);
-  r = parse_input(s_c); 
+  r = parse_input(s_c, *set_used);
   free(s_c);
   
   return r;
+}
+
+
+/* --------------------------------------------------------- */
+void FC_FUNC_(oct_parse_environment, OCT_PARSE_ENVIRONMENT)
+	(STR_F_TYPE s STR_ARG1)
+{
+  char *s_c;
+  
+  TO_C_STR1(s, s_c);
+  parse_environment(s_c); 
+  free(s_c);
 }
 
 
@@ -114,6 +126,13 @@ void FC_FUNC_(oct_parse_end, OCT_PARSE_END)
 	()
 {
   parse_end(); 
+}
+
+/* --------------------------------------------------------- */
+void FC_FUNC_(oct_sym_output_table, OCT_SYM_OUTPUT_TABLE)
+        (int *only_unused, int *mpiv_node)
+{
+  sym_output_table(*only_unused, *mpiv_node); 
 }
 
 

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 mode: shell-script -*-
-# $Id: 05-adw.03-filter_fixed.inp 13978 2015-05-14 16:03:03Z xavier $
+# $Id: 05-adw.03-filter_fixed.inp 15690 2016-10-25 21:56:26Z xavier $
 
 CalculationMode = opt_control
 
@@ -54,7 +54,7 @@ OCTTargetOperator = oct_tg_gstransformation
 0 | 1
 %
 
-OCTScheme  = oct_algorithm_wg05
+OCTScheme  = oct_wg05
 OCTDoubleCheck = no
 
 #----------------------------
@@ -72,5 +72,5 @@ electric_field | 1 | 0 | 0 | freq1 | "envelope_function"
 "envelope_function" | tdf_cw | ampl
 %
 
-
+DisableOpenCL = yes
 

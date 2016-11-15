@@ -1,4 +1,4 @@
-!! Copyright (C) 2002-2006 M. Marques, A. Castro, A. Rubio, G. Bertsch
+!! Copyright (C) 2002-2016 M. Marques, A. Castro, A. Rubio, G. Bertsch, X. Andrade
 !!
 !! This program is free software; you can redistribute it and/or modify
 !! it under the terms of the GNU General Public License as published by
@@ -15,38 +15,38 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: states_restart.F90 14976 2016-01-05 14:27:54Z xavier $
+!! $Id: states_restart.F90 15493 2016-07-18 21:01:02Z nicolastd $
 
 #include "global.h"
 
-module states_restart_m
-  use global_m
-  use grid_m
-  use io_m
-  use io_function_m
-  use kpoints_m
-  use lalg_basic_m
-  use linear_response_m
-  use loct_m
-  use mesh_m
-  use mesh_function_m
-  use messages_m
-  use mpi_m
-  use multigrid_m
-  use parser_m
-  use profiling_m
-  use par_vec_m
-  use restart_m
-  use simul_box_m
-  use smear_m
-  use states_m
-  use states_calc_m
-  use states_dim_m
-  use states_io_m
-  use string_m
-  use unit_m
-  use unit_system_m
-  use types_m
+module states_restart_oct_m
+  use global_oct_m
+  use grid_oct_m
+  use io_oct_m
+  use io_function_oct_m
+  use kpoints_oct_m
+  use lalg_basic_oct_m
+  use linear_response_oct_m
+  use loct_oct_m
+  use mesh_oct_m
+  use mesh_function_oct_m
+  use messages_oct_m
+  use mpi_oct_m
+  use multigrid_oct_m
+  use parser_oct_m
+  use profiling_oct_m
+  use par_vec_oct_m
+  use restart_oct_m
+  use simul_box_oct_m
+  use smear_oct_m
+  use states_oct_m
+  use states_calc_oct_m
+  use states_dim_oct_m
+  use states_io_oct_m
+  use string_oct_m
+  use unit_oct_m
+  use unit_system_oct_m
+  use types_oct_m
 
   implicit none
 
@@ -156,9 +156,9 @@ contains
     integer,    optional, intent(in)  :: st_start_writing
     logical,    optional, intent(in)  :: verbose
 
-    integer :: iunit_wfns, iunit_occs, iunit_states, root, chunk, iwt
+    integer :: iunit_wfns, iunit_occs, iunit_states, root
     integer :: err, err2(2), ik, idir, ist, idim, itot
-    character(len=MAX_PATH_LEN) :: filename, filename1, filename_tmp
+    character(len=MAX_PATH_LEN) :: filename, filename1
     character(len=300) :: lines(3)
     logical :: lr_wfns_are_associated, should_write, cmplxscl, verbose_
     FLOAT   :: kpoint(1:MAX_DIM)
@@ -232,7 +232,6 @@ contains
 
     itot = 1
     root = 0
-    chunk = 0
     err2 = 0
     do ik = 1, st%d%nik
       kpoint = M_ZERO
@@ -240,12 +239,8 @@ contains
 
       do ist = 1, st%nst
         do idim = 1, st%d%dim
-          chunk = chunk + 1
-          root = mod(itot-1,gr%mesh%mpi_grp%size)
+          root = mod(itot - 1, gr%mesh%mpi_grp%size)
           write(filename,'(i10.10)') itot
-          if (root == gr%mesh%mpi_grp%rank) then
-            filename_tmp = filename
-          end if
           
           if (st%have_left_states) filename1 = 'L'//trim(filename) !cmplxscl
 
@@ -284,15 +279,7 @@ contains
                   else
                     rff_global = dpsi
                   end if
-                  if (chunk == gr%mesh%mpi_grp%size .or. ist*ik == st%d%nik*st%nst*st%d%dim) then
-                    do iwt = 1, chunk
-                      if (iwt-1 == gr%mesh%mpi_grp%rank) then
-                        call drestart_write_mesh_function(restart, trim(filename_tmp), &
-                             gr%mesh, rff_global, err, root = iwt-1, is_global = .true.)
-                      end if
-                    end do
-                    chunk = 0
-                  end if
+                  call drestart_write_mesh_function(restart, filename, gr%mesh, rff_global, err, root = root, is_global = .true.)
                 else
                   call states_get_state(st, gr%mesh, idim, ist, ik, zpsi)
                   if (gr%mesh%parallel_in_domains) then
@@ -312,10 +299,16 @@ contains
                 err = 0
               end if
             else
-              if (states_are_real(st)) then
-                call drestart_write_mesh_function(restart, filename, gr%mesh, lr%ddl_psi(:, idim, ist, ik), err)
+              if(st%d%kpt%start <= ik .and. ik <= st%d%kpt%end) then
+                if (states_are_real(st)) then
+                  call drestart_write_mesh_function(restart, filename, gr%mesh, &
+                    lr%ddl_psi(:, idim, ist, ik), err)
+                else
+                  call zrestart_write_mesh_function(restart, filename, gr%mesh, &
+                    lr%zdl_psi(:, idim, ist, ik), err)      
+                end if
               else
-                call zrestart_write_mesh_function(restart, filename, gr%mesh, lr%zdl_psi(:, idim, ist, ik), err)
+                err = 0
               end if
             end if
             if (err /= 0) err2(2) = err2(2) + 1
@@ -773,7 +766,7 @@ contains
           do idim = 1, st%d%dim
             if(filled(idim, ist, ik)) cycle
 
-            call states_generate_random(st, gr%mesh, ist, ist)
+            call states_generate_random(st, gr%mesh, ist, ist, ik, ik)
           end do
         end do
       end do
@@ -1194,7 +1187,7 @@ contains
     POP_SUB(states_read_user_def_orbitals)
   end subroutine states_read_user_def_orbitals
 
-end module states_restart_m
+end module states_restart_oct_m
 
 
 !! Local Variables:

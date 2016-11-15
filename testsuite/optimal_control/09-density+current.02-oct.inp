@@ -48,7 +48,7 @@ TDTimeStep = dt
 # --------------
 # OCT parameters
 # --------------
-OCTScheme  = oct_algorithm_zr98
+OCTScheme  = oct_zr98
 
 OCTInitialState = oct_is_groundstate
 OCTTargetOperator = oct_tg_jdensity
@@ -95,5 +95,6 @@ Output=  wfs + density
 OutputFormat= axis_x
 TDOutput = laser + td_occup
 
+DisableOpenCL = yes
 
 

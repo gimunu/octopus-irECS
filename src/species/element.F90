@@ -15,16 +15,16 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: element.F90 13512 2015-03-24 15:20:56Z dstrubbe $
+!! $Id: element.F90 15203 2016-03-19 13:15:05Z xavier $
 
 #include "global.h"
 
-module element_m
-  use global_m
-  use io_m
-  use loct_m
-  use messages_m
-  use profiling_m
+module element_oct_m
+  use global_oct_m
+  use io_oct_m
+  use loct_oct_m
+  use messages_oct_m
+  use profiling_oct_m
   
   implicit none
 
@@ -34,6 +34,7 @@ module element_m
     element_init,              &
     element_end,               &
     element_mass,              &
+    element_vdw_radius,        &
     element_valid,             &
     element_atomic_number
 
@@ -42,6 +43,7 @@ module element_m
     integer          :: atomic_number
     character(len=3) :: symbol
     FLOAT            :: mass
+    FLOAT            :: vdw_radius
   end type element_t
   
 contains
@@ -68,16 +70,17 @@ contains
 
     fname = trim(conf%share)//'/pseudopotentials/elements'
     
-    nelement = max(0, loct_number_of_lines(fname) - 2) 
+    nelement = max(0, loct_number_of_lines(fname) - 3) 
 
     iunit = io_open(trim(conf%share)//'/pseudopotentials/elements', action='read', status='old', die=.false.)
 
     ! skip comment lines
     read(iunit, *)
     read(iunit, *)
+    read(iunit, *)
 
     do ii = 1, nelement
-      read(iunit, *) this%symbol, this%atomic_number, this%mass
+      read(iunit, *) this%symbol, this%atomic_number, this%mass, this%vdw_radius
       if(trim(this%symbol) == label(1:ilend)) then
         this%valid = .true.
         exit
@@ -111,6 +114,14 @@ contains
 
   ! ------------------------------------
 
+  pure FLOAT function element_vdw_radius(this) result(vdw_radius)
+    type(element_t),   intent(in)    :: this
+
+    vdw_radius = this%vdw_radius
+  end function element_vdw_radius
+
+  ! ------------------------------------
+
   pure logical function element_valid(this) result(valid)
     type(element_t),   intent(in)    :: this
 
@@ -125,7 +136,7 @@ contains
     atomic_number = this%atomic_number
   end function element_atomic_number
   
-end module element_m
+end module element_oct_m
 
 !! Local Variables:
 !! mode: f90

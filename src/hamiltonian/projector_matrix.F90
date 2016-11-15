@@ -15,15 +15,15 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: projector_matrix.F90 11591 2013-12-17 09:10:32Z joseba $
+!! $Id: projector_matrix.F90 15359 2016-05-11 21:20:14Z xavier $
 
 #include "global.h"
 
-module projector_matrix_m
-  use global_m
-  use messages_m
-  use profiling_m
-  use types_m
+module projector_matrix_oct_m
+  use global_oct_m
+  use messages_oct_m
+  use profiling_oct_m
+  use types_oct_m
 
   implicit none
 
@@ -39,6 +39,7 @@ module projector_matrix_m
     integer, pointer :: map(:)
     FLOAT,   pointer :: projectors(:, :)
     FLOAT,   pointer :: scal(:)
+    FLOAT,   allocatable :: position(:, :)
     integer          :: npoints
     integer          :: nprojs
   end type projector_matrix_t
@@ -69,6 +70,7 @@ contains
     SAFE_ALLOCATE(this%map(1:npoints))
     SAFE_ALLOCATE(this%projectors(1:npoints, 1:nprojs))
     SAFE_ALLOCATE(this%scal(1:nprojs))
+    SAFE_ALLOCATE(this%position(1:3, 1:npoints))
 
     POP_SUB(projector_matrix_allocate)
   end subroutine projector_matrix_allocate
@@ -83,13 +85,14 @@ contains
     SAFE_DEALLOCATE_P(this%map)
     SAFE_DEALLOCATE_P(this%projectors)
     SAFE_DEALLOCATE_P(this%scal)
+    SAFE_DEALLOCATE_A(this%position)
 
     POP_SUB(projector_matrix_deallocate)
   end subroutine projector_matrix_deallocate
 
   ! -------------------------------------------------
 
-end module projector_matrix_m
+end module projector_matrix_oct_m
 
 !! Local Variables:
 !! mode: f90

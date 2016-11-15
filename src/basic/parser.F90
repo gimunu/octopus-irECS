@@ -15,12 +15,12 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: parser.F90 14308 2015-06-22 16:23:17Z dstrubbe $
+!! $Id: parser.F90 15737 2016-11-14 04:36:01Z dstrubbe $
 
 #include "global.h"
 
 !> This module is only supposed to be used within this file.
-module block_t_m
+module block_t_oct_m
   implicit none
   
   private
@@ -30,23 +30,22 @@ module block_t_m
     integer, pointer :: p
   end type block_t
 
-end module block_t_m
+end module block_t_oct_m
 
 
-module parser_m
-  use block_t_m
-  use global_m
-  use loct_m
-  use mpi_m
-  use unit_m
-  use varinfo_m
+module parser_oct_m
+  use block_t_oct_m
+  use global_oct_m
+  use loct_oct_m
+  use mpi_oct_m
+  use unit_oct_m
+  use varinfo_oct_m
   
   implicit none
 
-  ! Define which routines can be seen from the outside.
   private
   public ::              &
-    block_t,             &   ! This is defined in block_t_m above
+    block_t,             &   ! This is defined in block_t_oct_m above
     parser_init,         &
     parser_end,          &
     parse_init,          &
@@ -89,17 +88,33 @@ module parser_m
   end interface parse_putsym
 
   interface parse_input_file
-    integer function oct_parse_input(file_in)
+    integer function oct_parse_input(file_in, set_used)
       implicit none
       character(len=*), intent(in)  :: file_in
+      integer,          intent(in)  :: set_used
     end function oct_parse_input
   end interface parse_input_file
+
+  interface parse_environment
+    subroutine oct_parse_environment(prefix)
+      implicit none
+      character(len=*), intent(in)  :: prefix
+    end subroutine oct_parse_environment
+  end interface parse_environment
 
   interface parse_end
     subroutine oct_parse_end()
       implicit none
     end subroutine oct_parse_end
   end interface parse_end
+
+  interface sym_output_table
+    subroutine oct_sym_output_table(only_unused, mpiv_node)
+      implicit none
+      integer, intent(in) :: only_unused
+      integer, intent(in) :: mpiv_node
+    end subroutine oct_sym_output_table
+  end interface sym_output_table
 
   interface parse_isdef
     integer function oct_parse_isdef(name)
@@ -137,7 +152,7 @@ module parser_m
     end subroutine oct_parse_string
 
     integer function oct_parse_block(name, blk)
-      use block_t_m
+      use block_t_oct_m
       implicit none
       character(len=*), intent(in) :: name
       type(block_t), intent(out) :: blk
@@ -156,7 +171,7 @@ module parser_m
 
   interface parse_block_end
     subroutine oct_parse_block_end(blk)
-      use block_t_m
+      use block_t_oct_m
       implicit none
       type(block_t), intent(inout) :: blk
     end subroutine oct_parse_block_end
@@ -164,7 +179,7 @@ module parser_m
 
   interface parse_block_n
     integer function oct_parse_block_n(blk)
-      use block_t_m
+      use block_t_oct_m
       implicit none
       type(block_t), intent(in) :: blk
     end function oct_parse_block_n
@@ -172,7 +187,7 @@ module parser_m
 
   interface parse_block_cols
     integer function oct_parse_block_cols(blk, line)
-      use block_t_m
+      use block_t_oct_m
       implicit none
       type(block_t), intent(in) :: blk
       integer, intent(in) :: line
@@ -181,7 +196,7 @@ module parser_m
 
   interface parse_block_integer
     subroutine oct_parse_block_int(blk, l, c, res)
-      use block_t_m
+      use block_t_oct_m
       implicit none
       type(block_t), intent(in) :: blk
       integer, intent(in)          :: l, c
@@ -191,7 +206,7 @@ module parser_m
 
   interface parse_block_float
     subroutine oct_parse_block_double(blk, l, c, res)
-      use block_t_m
+      use block_t_oct_m
       implicit none
       type(block_t), intent(in) :: blk
       integer, intent(in)          :: l, c
@@ -204,7 +219,7 @@ module parser_m
 
   interface parse_block_cmplx
     subroutine oct_parse_block_complex(blk, l, c, res)
-      use block_t_m
+      use block_t_oct_m
       implicit none
       type(block_t), intent(in) :: blk
       integer, intent(in)          :: l, c
@@ -215,7 +230,7 @@ module parser_m
 
   interface parse_block_string
     subroutine oct_parse_block_string(blk, l, c, res)
-      use block_t_m
+      use block_t_oct_m
       implicit none
       type(block_t), intent(in) :: blk
       integer, intent(in)          :: l, c
@@ -295,7 +310,7 @@ contains
     end if
 
     ! read in option definitions
-    ierr = parse_input_file(trim(conf%share)//'/variables')
+    ierr = parse_input_file(trim(conf%share)//'/variables', set_used = 1)
     if(ierr /= 0) then
       write(stderr,'(a)') '*** Fatal Error (description follows)'
       write(stderr,'(a)') 'Error initializing parser'
@@ -304,7 +319,7 @@ contains
     end if
 
     ! setup standard input
-    ierr = parse_input_file('inp')
+    ierr = parse_input_file('inp', set_used = 0)
     if(ierr /= 0) then 
       write(stderr,'(a)') '*** Fatal Error (description follows)' 
       write(stderr,'(a)') 'Error initializing parser'
@@ -313,13 +328,16 @@ contains
       call parse_fatal()
     end if
 
-
+    ! parse OCT_ prefixed variables from environment
+    call parse_environment("OCT_")
+    
   end subroutine parser_init
 
 
   ! ---------------------------------------------------------
   subroutine parser_end
 
+    call sym_output_table(only_unused = 1, mpiv_node = mpi_world%rank)
     call parse_end()
 
   end subroutine parser_end
@@ -626,7 +644,7 @@ contains
 
   end subroutine parse_fatal
   
-end module parser_m
+end module parser_oct_m
 
 !! Local Variables:
 !! mode: f90

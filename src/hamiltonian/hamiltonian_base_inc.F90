@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: hamiltonian_base_inc.F90 14634 2015-10-04 05:57:39Z xavier $
+!! $Id: hamiltonian_base_inc.F90 15473 2016-07-12 02:58:36Z xavier $
 
 subroutine X(hamiltonian_base_local)(this, mesh, std, ispin, psib, vpsib)
   type(hamiltonian_base_t),    intent(in)    :: this
@@ -28,10 +28,9 @@ subroutine X(hamiltonian_base_local)(this, mesh, std, ispin, psib, vpsib)
   PUSH_SUB(X(hamiltonian_base_local))
 
   if(batch_status(psib) == BATCH_CL_PACKED) then
-#ifdef HAVE_OPENCL
+    ASSERT(.not. allocated(this%Impotential))
     call X(hamiltonian_base_local_sub)(this%potential, mesh, std, ispin, &
       psib, vpsib, potential_opencl = this%potential_opencl)
-#endif
   else
     if(allocated(this%Impotential)) then
       call X(hamiltonian_base_local_sub)(this%potential, mesh, std, ispin, &
@@ -52,22 +51,21 @@ subroutine X(hamiltonian_base_local_sub)(potential, mesh, std, ispin, psib, vpsi
   type(batch_t), target,        intent(in)    :: psib
   type(batch_t), target,        intent(inout) :: vpsib
   FLOAT, optional,              intent(in)    :: Impotential(:,:)
-  type(opencl_mem_t), optional, intent(in)    :: potential_opencl
+  type(accel_mem_t), optional, intent(in)    :: potential_opencl
 
   integer :: ist, ip
   R_TYPE, pointer :: psi(:, :), vpsi(:, :)
   R_TYPE  :: psi1, psi2
   FLOAT   :: vv, Imvv
-  logical :: cmplxscl
-#ifdef HAVE_OPENCL
+  R_TYPE  :: pot(1:4) 
+  logical :: pot_is_cmplx
   integer :: pnp, iprange
-#endif
 
   call profiling_in(prof_vlpsi, "VLPSI")
   PUSH_SUB(X(hamiltonian_base_local_sub))
 
-  cmplxscl = .false.
-  if(present(Impotential)) cmplxscl = .true.
+  pot_is_cmplx = .false.
+  if(present(Impotential)) pot_is_cmplx = .true.
 
   if(batch_is_packed(psib) .or. batch_is_packed(vpsib)) then
     ASSERT(batch_is_packed(psib))
@@ -77,52 +75,50 @@ subroutine X(hamiltonian_base_local_sub)(potential, mesh, std, ispin, psib, vpsi
 
   select case(batch_status(psib))
   case(BATCH_CL_PACKED)
-#ifdef HAVE_OPENCL
-    ASSERT(.not. cmplxscl) ! not implemented
+    ASSERT(.not. pot_is_cmplx) ! not implemented
 
-    pnp = opencl_padded_size(mesh%np)
+    pnp = accel_padded_size(mesh%np)
 
     select case(std%ispin)
 
     case(UNPOLARIZED, SPIN_POLARIZED)
-      call opencl_set_kernel_arg(kernel_vpsi, 0, pnp*(ispin - 1))
-      call opencl_set_kernel_arg(kernel_vpsi, 1, mesh%np)
-      call opencl_set_kernel_arg(kernel_vpsi, 2, potential_opencl)
-      call opencl_set_kernel_arg(kernel_vpsi, 3, psib%pack%buffer)
-      call opencl_set_kernel_arg(kernel_vpsi, 4, log2(psib%pack%size_real(1)))
-      call opencl_set_kernel_arg(kernel_vpsi, 5, vpsib%pack%buffer)
-      call opencl_set_kernel_arg(kernel_vpsi, 6, log2(vpsib%pack%size_real(1)))
+      call accel_set_kernel_arg(kernel_vpsi, 0, pnp*(ispin - 1))
+      call accel_set_kernel_arg(kernel_vpsi, 1, mesh%np)
+      call accel_set_kernel_arg(kernel_vpsi, 2, potential_opencl)
+      call accel_set_kernel_arg(kernel_vpsi, 3, psib%pack%buffer)
+      call accel_set_kernel_arg(kernel_vpsi, 4, log2(psib%pack%size_real(1)))
+      call accel_set_kernel_arg(kernel_vpsi, 5, vpsib%pack%buffer)
+      call accel_set_kernel_arg(kernel_vpsi, 6, log2(vpsib%pack%size_real(1)))
 
-      iprange = opencl_max_workgroup_size()/psib%pack%size_real(1)
+      iprange = accel_max_workgroup_size()/psib%pack%size_real(1)
 
-      call opencl_kernel_run(kernel_vpsi, (/psib%pack%size_real(1), pnp/), (/psib%pack%size_real(1), iprange/))
+      call accel_kernel_run(kernel_vpsi, (/psib%pack%size_real(1), pnp/), (/psib%pack%size_real(1), iprange/))
 
     case(SPINORS)
-      call opencl_set_kernel_arg(kernel_vpsi_spinors, 0, mesh%np)
-      call opencl_set_kernel_arg(kernel_vpsi_spinors, 1, potential_opencl)
-      call opencl_set_kernel_arg(kernel_vpsi_spinors, 2, pnp)
-      call opencl_set_kernel_arg(kernel_vpsi_spinors, 3, psib%pack%buffer)
-      call opencl_set_kernel_arg(kernel_vpsi_spinors, 4, psib%pack%size(1))
-      call opencl_set_kernel_arg(kernel_vpsi_spinors, 5, vpsib%pack%buffer)
-      call opencl_set_kernel_arg(kernel_vpsi_spinors, 6, vpsib%pack%size(1))
+      call accel_set_kernel_arg(kernel_vpsi_spinors, 0, mesh%np)
+      call accel_set_kernel_arg(kernel_vpsi_spinors, 1, potential_opencl)
+      call accel_set_kernel_arg(kernel_vpsi_spinors, 2, pnp)
+      call accel_set_kernel_arg(kernel_vpsi_spinors, 3, psib%pack%buffer)
+      call accel_set_kernel_arg(kernel_vpsi_spinors, 4, psib%pack%size(1))
+      call accel_set_kernel_arg(kernel_vpsi_spinors, 5, vpsib%pack%buffer)
+      call accel_set_kernel_arg(kernel_vpsi_spinors, 6, vpsib%pack%size(1))
 
-      call opencl_kernel_run(kernel_vpsi_spinors, (/psib%pack%size(1)/2, pnp/), &
-        (/psib%pack%size(1)/2, 2*opencl_max_workgroup_size()/psib%pack%size(1)/))
+      call accel_kernel_run(kernel_vpsi_spinors, (/psib%pack%size(1)/2, pnp/), &
+        (/psib%pack%size(1)/2, 2*accel_max_workgroup_size()/psib%pack%size(1)/))
 
     end select
 
-    call opencl_finish()
+    call accel_finish()
 
     call profiling_count_operations((R_MUL*psib%nst)*mesh%np)
     call profiling_count_transfers(mesh%np, M_ONE)
     call profiling_count_transfers(mesh%np*psib%nst, R_TOTYPE(M_ONE))
 
-#endif
   case(BATCH_PACKED)
 
     select case(std%ispin)
     case(UNPOLARIZED, SPIN_POLARIZED)
-      if(cmplxscl)then
+      if(pot_is_cmplx)then
         do ip = 1, mesh%np
           vv = potential(ip, ispin)
           Imvv = Impotential(ip, ispin)
@@ -147,20 +143,36 @@ subroutine X(hamiltonian_base_local_sub)(potential, mesh, std, ispin, psib, vpsi
     case(SPINORS)
       ASSERT(mod(psib%nst_linear, 2) == 0)
       !the spinor case is more complicated since it mixes the two components.
-
-      !$omp parallel do private(psi1, psi2, ist)
-      do ip = 1, mesh%np
-        do ist = 1, psib%nst_linear, 2
-          psi1 = psib%pack%zpsi(ist    , ip)
-          psi2 = psib%pack%zpsi(ist + 1, ip)
-          vpsib%pack%zpsi(ist    , ip) = vpsib%pack%zpsi(ist    , ip) + &
-            potential(ip, 1)*psi1 + (potential(ip, 3) + M_zI*potential(ip, 4))*psi2
-          vpsib%pack%zpsi(ist + 1, ip) = vpsib%pack%zpsi(ist + 1, ip) + &
-            potential(ip, 2)*psi2 + (potential(ip, 3) - M_zI*potential(ip, 4))*psi1
+      if(pot_is_cmplx)then
+        !$omp parallel do private(psi1, psi2, ist)
+        do ip = 1, mesh%np
+          do ist = 1, psib%nst_linear, 2
+            psi1 = psib%pack%zpsi(ist    , ip)
+            psi2 = psib%pack%zpsi(ist + 1, ip)
+            pot(1:4) = potential(ip, 1:4) + M_zI * Impotential(ip, 1:4)
+            vpsib%pack%zpsi(ist    , ip) = vpsib%pack%zpsi(ist    , ip) + &
+                   pot(1)*psi1 + (pot(3) + M_zI*pot(4))*psi2
+            vpsib%pack%zpsi(ist + 1, ip) = vpsib%pack%zpsi(ist + 1, ip) + &
+                   pot(2)*psi2 + (pot(3) - M_zI*pot(4))*psi1            
+          end do
         end do
-      end do
-      !$omp end parallel do
-
+        !$omp end parallel do
+                
+      else
+        !$omp parallel do private(psi1, psi2, ist)
+        do ip = 1, mesh%np
+          do ist = 1, psib%nst_linear, 2
+            psi1 = psib%pack%zpsi(ist    , ip)
+            psi2 = psib%pack%zpsi(ist + 1, ip)
+            vpsib%pack%zpsi(ist    , ip) = vpsib%pack%zpsi(ist    , ip) + &
+              potential(ip, 1)*psi1 + (potential(ip, 3) + M_zI*potential(ip, 4))*psi2
+            vpsib%pack%zpsi(ist + 1, ip) = vpsib%pack%zpsi(ist + 1, ip) + &
+              potential(ip, 2)*psi2 + (potential(ip, 3) - M_zI*potential(ip, 4))*psi1            
+          end do
+        end do
+        !$omp end parallel do
+      end if
+      
       call profiling_count_operations((6*R_ADD + 2*R_MUL)*mesh%np*psib%nst)
 
     end select
@@ -169,7 +181,7 @@ subroutine X(hamiltonian_base_local_sub)(potential, mesh, std, ispin, psib, vpsi
 
     select case(std%ispin)
     case(UNPOLARIZED, SPIN_POLARIZED)
-      if(cmplxscl)then
+      if(pot_is_cmplx)then
         do ist = 1, psib%nst
           forall (ip = 1:mesh%np)
             vpsib%states(ist)%X(psi)(ip, 1) = vpsib%states(ist)%X(psi)(ip, 1) + &
@@ -193,18 +205,33 @@ subroutine X(hamiltonian_base_local_sub)(potential, mesh, std, ispin, psib, vpsi
 
     case(SPINORS)
       !the spinor case is more complicated since it mixes the two components.
-      do ist = 1, psib%nst
-        psi  => psib%states(ist)%X(psi)
-        vpsi => vpsib%states(ist)%X(psi)
+      if (pot_is_cmplx) then
+        do ist = 1, psib%nst
+          psi  => psib%states(ist)%X(psi)
+          vpsi => vpsib%states(ist)%X(psi)
+          
+          do ip = 1, mesh%np
+            pot(1:4) = potential(ip, 1:4) + M_zI * Impotential(ip, 1:4)
+            vpsi(ip, 1) = vpsi(ip, 1) + pot(1)*psi(ip, 1) + &
+                          (pot(3) + M_zI*pot(4))*psi(ip, 2)
+            vpsi(ip, 2) = vpsi(ip, 2) + pot(2)*psi(ip, 2) + &
+                          (pot(3) - M_zI*pot(4))*psi(ip, 1)
+          end do
+        end do
+        
+      else
+        do ist = 1, psib%nst
+          psi  => psib%states(ist)%X(psi)
+          vpsi => vpsib%states(ist)%X(psi)
 
-        forall(ip = 1:mesh%np)
-          vpsi(ip, 1) = vpsi(ip, 1) + potential(ip, 1)*psi(ip, 1) + &
-            (potential(ip, 3) + M_zI*potential(ip, 4))*psi(ip, 2)
-          vpsi(ip, 2) = vpsi(ip, 2) + potential(ip, 2)*psi(ip, 2) + &
-            (potential(ip, 3) - M_zI*potential(ip, 4))*psi(ip, 1)
-        end forall
-
-      end do
+          forall(ip = 1:mesh%np)
+            vpsi(ip, 1) = vpsi(ip, 1) + potential(ip, 1)*psi(ip, 1) + &
+              (potential(ip, 3) + M_zI*potential(ip, 4))*psi(ip, 2)
+            vpsi(ip, 2) = vpsi(ip, 2) + potential(ip, 2)*psi(ip, 2) + &
+              (potential(ip, 3) - M_zI*potential(ip, 4))*psi(ip, 1)
+          end forall
+        end do
+      end if
       call profiling_count_operations((6*R_ADD + 2*R_MUL)*mesh%np*psib%nst)
 
     end select
@@ -215,6 +242,118 @@ subroutine X(hamiltonian_base_local_sub)(potential, mesh, std, ispin, psib, vpsi
   POP_SUB(X(hamiltonian_base_local_sub))
 
 end subroutine X(hamiltonian_base_local_sub)
+
+! ---------------------------------------------------------------------------------------
+
+subroutine X(hamiltonian_base_phase)(this, der, np, iqn, conjugate, psib, src)
+  type(hamiltonian_base_t),              intent(in)    :: this
+  type(derivatives_t),                   intent(in)    :: der
+  integer,                               intent(in)    :: np
+  integer,                               intent(in)    :: iqn
+  logical,                               intent(in)    :: conjugate
+  type(batch_t),                 target, intent(inout) :: psib
+  type(batch_t),       optional, target, intent(in)    :: src
+
+  integer :: ip, ii
+  type(batch_t), pointer :: src_
+  type(profile_t), save :: phase_prof
+  CMPLX :: phase
+  integer :: wgsize
+  type(accel_kernel_t), save :: ker_phase
+
+  PUSH_SUB(X(hamiltonian_base_phase))
+  call profiling_in(phase_prof, "PBC_PHASE_APPLY")
+
+  call profiling_count_operations(R_MUL*dble(np)*psib%nst_linear)
+
+  ASSERT(np <= der%mesh%np_part)
+
+  src_ => psib
+  if(present(src)) src_ => src
+
+  select case(batch_status(psib))
+  case(BATCH_PACKED)
+
+    if(conjugate) then
+
+      !$omp parallel do private(ip, ii, phase)
+      do ip = 1, np
+        phase = conjg(this%phase(ip, iqn))
+        do ii = 1, psib%nst_linear
+          psib%pack%X(psi)(ii, ip) = phase*src_%pack%X(psi)(ii, ip)
+        end do
+      end do
+      !$omp end parallel do
+
+    else
+
+      !$omp parallel do private(ip, ii, phase)
+      do ip = 1, np
+        phase = this%phase(ip, iqn)
+        do ii = 1, psib%nst_linear
+          psib%pack%X(psi)(ii, ip) = phase*src_%pack%X(psi)(ii, ip)
+        end do
+      end do
+      !$omp end parallel do
+
+    end if
+
+  case(BATCH_NOT_PACKED)
+
+    if(conjugate) then
+
+      !$omp parallel private(ii, ip)
+      do ii = 1, psib%nst_linear
+        !$omp do
+        do ip = 1, np
+          psib%states_linear(ii)%X(psi)(ip) = conjg(this%phase(ip, iqn))*src_%states_linear(ii)%X(psi)(ip)
+        end do
+        !$omp end do nowait
+      end do
+      !$omp end parallel
+
+    else
+      !$omp parallel private(ii, ip)
+      do ii = 1, psib%nst_linear
+        !$omp do
+        do ip = 1, np
+          psib%states_linear(ii)%X(psi)(ip) = this%phase(ip, iqn)*src_%states_linear(ii)%X(psi)(ip)
+        end do
+        !$omp end do nowait
+      end do
+      !$omp end parallel
+
+    end if
+
+  case(BATCH_CL_PACKED)
+    call accel_kernel_start_call(ker_phase, 'phase.cl', 'phase_hamiltonian')
+
+    if(conjugate) then
+      call accel_set_kernel_arg(ker_phase, 0, 1_4)
+    else
+      call accel_set_kernel_arg(ker_phase, 0, 0_4)
+    end if
+
+    call accel_set_kernel_arg(ker_phase, 1, (iqn - this%buff_phase_qn_start)*der%mesh%np_part)
+    call accel_set_kernel_arg(ker_phase, 2, np)
+    call accel_set_kernel_arg(ker_phase, 3, this%buff_phase)
+    call accel_set_kernel_arg(ker_phase, 4, src_%pack%buffer)
+    call accel_set_kernel_arg(ker_phase, 5, log2(src_%pack%size(1)))
+    call accel_set_kernel_arg(ker_phase, 6, psib%pack%buffer)
+    call accel_set_kernel_arg(ker_phase, 7, log2(psib%pack%size(1)))
+
+    wgsize = accel_kernel_workgroup_size(ker_phase)/psib%pack%size(1)
+
+    call accel_kernel_run(ker_phase, (/psib%pack%size(1), pad(np, wgsize)/), (/psib%pack%size(1), wgsize/))
+
+    call accel_finish()
+  end select
+
+  call batch_pack_was_modified(psib)
+
+  call profiling_out(phase_prof)
+  POP_SUB(X(hamiltonian_base_phase))
+end subroutine X(hamiltonian_base_phase)
 
 ! ---------------------------------------------------------------------------------------
 
@@ -270,6 +409,7 @@ subroutine X(hamiltonian_base_rashba)(this, der, std, psib, vpsib)
   POP_SUB(X(hamiltonian_base_rashba))
 end subroutine X(hamiltonian_base_rashba)
 
+! -----------------------------------------------------------------------------
 
 subroutine X(hamiltonian_base_magnetic)(this, der, std, ep, ispin, psib, vpsib)
   type(hamiltonian_base_t),    intent(in)    :: this
@@ -352,15 +492,15 @@ subroutine X(hamiltonian_base_nlocal_start)(this, mesh, std, ik, psib, projectio
 
   integer :: ist, ip, iproj, imat, nreal, iprojection
   integer :: npoints, nprojs, nst
-  R_TYPE, allocatable :: psi(:, :)
+  integer, allocatable :: ind(:)
+  R_TYPE :: aa, bb, cc, dd
   CMPLX :: phase
   type(projector_matrix_t), pointer :: pmat
-#ifdef HAVE_OPENCL
   integer :: padnprojs, wgsize, lnprojs, size
   type(profile_t), save :: cl_prof
-  type(octcl_kernel_t), save :: ker_proj_bra, ker_proj_bra_phase
-  type(cl_kernel) :: kernel
-#endif
+  type(accel_kernel_t), save, target :: ker_proj_bra, ker_proj_bra_phase
+  type(accel_kernel_t), pointer :: kernel
+  
   if(.not. this%apply_projector_matrices) return
 
   call profiling_in(prof_vnlpsi_start, "VNLPSI_MAT_BRA")
@@ -373,60 +513,59 @@ subroutine X(hamiltonian_base_nlocal_start)(this, mesh, std, ik, psib, projectio
   nreal = nst
 #endif
 
-#ifdef HAVE_OPENCL
-  if(batch_is_packed(psib) .and. opencl_is_enabled()) then
-   
-    call opencl_create_buffer(projection%buff_projection, CL_MEM_READ_WRITE, R_TYPE_VAL, &
+  if(batch_is_packed(psib) .and. accel_is_enabled()) then
+
+    call accel_create_buffer(projection%buff_projection, ACCEL_MEM_READ_WRITE, R_TYPE_VAL, &
       this%full_projection_size*psib%pack%size_real(1))
-    
+
     call profiling_in(cl_prof, "CL_PROJ_BRA")
 
     if(allocated(this%projector_phases)) then
-      call octcl_kernel_start_call(ker_proj_bra_phase, 'projector.cl', 'projector_bra_phase')
-      kernel = octcl_kernel_get_ref(ker_proj_bra_phase)
+      call accel_kernel_start_call(ker_proj_bra_phase, 'projector.cl', 'projector_bra_phase')
+      kernel => ker_proj_bra_phase
       size = psib%pack%size(1)
       ASSERT(R_TYPE_VAL == TYPE_CMPLX)
     else
-      call octcl_kernel_start_call(ker_proj_bra, 'projector.cl', 'projector_bra')
-      kernel = octcl_kernel_get_ref(ker_proj_bra)
+      call accel_kernel_start_call(ker_proj_bra, 'projector.cl', 'projector_bra')
+      kernel => ker_proj_bra
       size = psib%pack%size_real(1)
     end if
 
-    call opencl_set_kernel_arg(kernel, 0, this%nprojector_matrices)
-    call opencl_set_kernel_arg(kernel, 1, this%buff_offsets)
-    call opencl_set_kernel_arg(kernel, 2, this%buff_matrices)
-    call opencl_set_kernel_arg(kernel, 3, this%buff_maps)
-    call opencl_set_kernel_arg(kernel, 4, this%buff_scals)
-    call opencl_set_kernel_arg(kernel, 5, psib%pack%buffer)
-    call opencl_set_kernel_arg(kernel, 6, log2(size))
-    call opencl_set_kernel_arg(kernel, 7, projection%buff_projection)
-    call opencl_set_kernel_arg(kernel, 8, log2(size))
+    call accel_set_kernel_arg(kernel, 0, this%nprojector_matrices)
+    call accel_set_kernel_arg(kernel, 1, this%buff_offsets)
+    call accel_set_kernel_arg(kernel, 2, this%buff_matrices)
+    call accel_set_kernel_arg(kernel, 3, this%buff_maps)
+    call accel_set_kernel_arg(kernel, 4, this%buff_scals)
+    call accel_set_kernel_arg(kernel, 5, psib%pack%buffer)
+    call accel_set_kernel_arg(kernel, 6, log2(size))
+    call accel_set_kernel_arg(kernel, 7, projection%buff_projection)
+    call accel_set_kernel_arg(kernel, 8, log2(size))
 
     if(allocated(this%projector_phases)) then
-      call opencl_set_kernel_arg(kernel, 9, this%buff_projector_phases)
-      call opencl_set_kernel_arg(kernel, 10, (ik - std%kpt%start)*this%total_points)
+      call accel_set_kernel_arg(kernel, 9, this%buff_projector_phases)
+      call accel_set_kernel_arg(kernel, 10, (ik - std%kpt%start)*this%total_points)
     end if
 
     padnprojs = pad_pow2(this%max_nprojs)
-    lnprojs = min(opencl_kernel_workgroup_size(kernel)/size, padnprojs)
+    lnprojs = min(accel_kernel_workgroup_size(kernel)/size, padnprojs)
 
-    call opencl_kernel_run(kernel, &
+    call accel_kernel_run(kernel, &
       (/size, padnprojs, this%nprojector_matrices/), (/size, lnprojs, 1/))
 
     do imat = 1, this%nprojector_matrices
       pmat => this%projector_matrices(imat)
-      
+
       npoints = pmat%npoints
       nprojs = pmat%nprojs
-      
+
       call profiling_count_operations(nreal*nprojs*M_TWO*npoints + nst*nprojs)
     end do
 
-    call opencl_finish()
+    call accel_finish()
 
     if(mesh%parallel_in_domains) then
       SAFE_ALLOCATE(projection%X(projection)(1:psib%pack%size_real(1), 1:this%full_projection_size))
-      call opencl_read_buffer(projection%buff_projection, &
+      call accel_read_buffer(projection%buff_projection, &
         this%full_projection_size*psib%pack%size_real(1), projection%X(projection))
     end if
 
@@ -436,84 +575,131 @@ subroutine X(hamiltonian_base_nlocal_start)(this, mesh, std, ik, psib, projectio
     call profiling_out(prof_vnlpsi_start)
     return
   end if
-#endif
 
   SAFE_ALLOCATE(projection%X(projection)(1:nst, 1:this%full_projection_size))
   projection%X(projection) = M_ZERO
-  iprojection = 0
 
+  SAFE_ALLOCATE(ind(1:this%nprojector_matrices))
+
+  iprojection = 0
   do imat = 1, this%nprojector_matrices
     pmat => this%projector_matrices(imat)
+    npoints = pmat%npoints
+    nprojs = pmat%nprojs
+    ind(imat) = iprojection
+    iprojection = iprojection + nprojs
+    call profiling_count_operations(nprojs*(R_ADD + R_MUL)*npoints + nst*nprojs)
+  end do
 
+  !$omp parallel do private(imat, pmat, iprojection, npoints, nprojs, iproj, ist, aa, bb, cc, dd, ip)
+  do imat = 1, this%nprojector_matrices
+    pmat => this%projector_matrices(imat)
+    iprojection = ind(imat)
     npoints = pmat%npoints
     nprojs = pmat%nprojs
 
-    if(npoints /= 0) then
+    if(npoints == 0) cycle
 
-      SAFE_ALLOCATE(psi(1:nst, 1:npoints))
-
-      call profiling_in(prof_gather, "PROJ_MAT_GATHER")
-
-      ! collect all the points we need in a continuous array
+    if(.not. allocated(this%projector_phases)) then
       if(batch_is_packed(psib)) then
 
-        !$omp parallel do private(ip, ist)
-        do ip = 1, npoints
-          forall(ist = 1:nst)
-            psi(ist, ip) = psib%pack%X(psi)(ist, pmat%map(ip))
-          end forall
+        do iproj = 1, nprojs
+
+          do ist = 1, nst - 4 + 1, 4
+            aa = CNST(0.0)
+            bb = CNST(0.0)
+            cc = CNST(0.0)
+            dd = CNST(0.0)
+            do ip = 1, npoints
+              aa = aa + pmat%projectors(ip, iproj)*psib%pack%X(psi)(ist    , pmat%map(ip))
+              bb = bb + pmat%projectors(ip, iproj)*psib%pack%X(psi)(ist + 1, pmat%map(ip))
+              cc = cc + pmat%projectors(ip, iproj)*psib%pack%X(psi)(ist + 2, pmat%map(ip))
+              dd = dd + pmat%projectors(ip, iproj)*psib%pack%X(psi)(ist + 3, pmat%map(ip))
+            end do
+            projection%X(projection)(ist    , iprojection + iproj) = pmat%scal(iproj)*aa
+            projection%X(projection)(ist + 1, iprojection + iproj) = pmat%scal(iproj)*bb
+            projection%X(projection)(ist + 2, iprojection + iproj) = pmat%scal(iproj)*cc
+            projection%X(projection)(ist + 3, iprojection + iproj) = pmat%scal(iproj)*dd
+          end do
+
+          do ist = ist, nst
+            aa = CNST(0.0)
+            do ip = 1, npoints
+              aa = aa + pmat%projectors(ip, iproj)*psib%pack%X(psi)(ist, pmat%map(ip))
+            end do
+            projection%X(projection)(ist, iprojection + iproj) = pmat%scal(iproj)*aa
+          end do
+          
         end do
-        !$omp end parallel do
 
       else
 
-        do ist = 1, nst
-          !$omp parallel do
-          do ip = 1, npoints
-            psi(ist, ip) = psib%states_linear(ist)%X(psi)(pmat%map(ip))
+        do iproj = 1, nprojs
+          do ist = 1, nst
+            aa = CNST(0.0)
+            do ip = 1, npoints
+              aa = aa + pmat%projectors(ip, iproj)*psib%states_linear(ist)%X(psi)(pmat%map(ip))
+            end do
+            projection%X(projection)(ist, iprojection + iproj) = pmat%scal(iproj)*aa
           end do
-          !$omp end parallel do 
         end do
 
       end if
 
-      if(allocated(this%projector_phases)) then
+    else
 
-        !$omp parallel do private(ip, ist, phase)
-        do ip = 1, npoints
-          phase = this%projector_phases(ip, imat, ik)
-          forall(ist = 1:nst)
-            psi(ist, ip) = phase*psi(ist, ip)
-          end forall
+      if(batch_is_packed(psib)) then
+
+        do iproj = 1, nprojs
+
+          do ist = 1, nst - 4 + 1, 4
+            aa = CNST(0.0)
+            bb = CNST(0.0)
+            cc = CNST(0.0)
+            dd = CNST(0.0)
+            do ip = 1, npoints
+              aa = aa + pmat%projectors(ip, iproj)*psib%pack%X(psi)(ist    , pmat%map(ip))*this%projector_phases(ip, imat, ik)
+              bb = bb + pmat%projectors(ip, iproj)*psib%pack%X(psi)(ist + 1, pmat%map(ip))*this%projector_phases(ip, imat, ik)
+              cc = cc + pmat%projectors(ip, iproj)*psib%pack%X(psi)(ist + 2, pmat%map(ip))*this%projector_phases(ip, imat, ik)
+              dd = dd + pmat%projectors(ip, iproj)*psib%pack%X(psi)(ist + 3, pmat%map(ip))*this%projector_phases(ip, imat, ik)
+            end do
+            projection%X(projection)(ist    , iprojection + iproj) = pmat%scal(iproj)*aa
+            projection%X(projection)(ist + 1, iprojection + iproj) = pmat%scal(iproj)*bb
+            projection%X(projection)(ist + 2, iprojection + iproj) = pmat%scal(iproj)*cc
+            projection%X(projection)(ist + 3, iprojection + iproj) = pmat%scal(iproj)*dd
+          end do
+          
+
+          do ist = ist, nst
+            aa = CNST(0.0)
+            do ip = 1, npoints
+              aa = aa + pmat%projectors(ip, iproj)*psib%pack%X(psi)(ist, pmat%map(ip))*this%projector_phases(ip, imat, ik)
+            end do
+            projection%X(projection)(ist, iprojection + iproj) = pmat%scal(iproj)*aa
+          end do
+          
         end do
-        !$omp end parallel do
+
+      else
+
+        do iproj = 1, nprojs
+          do ist = 1, nst
+            aa = CNST(0.0)
+            do ip = 1, npoints
+              aa = aa + pmat%projectors(ip, iproj)*psib%states_linear(ist)%X(psi)(pmat%map(ip))*this%projector_phases(ip, imat, ik)
+            end do
+            projection%X(projection)(ist, iprojection + iproj) = pmat%scal(iproj)*aa
+          end do
+
+        end do
 
       end if
-
-      call profiling_out(prof_gather)
-      
-      ! Now matrix-multiply to calculate the projections.
-      ! the line below does: projection = matmul(psi, pmat%projectors)
-      call blas_gemm('N', 'N', nreal, nprojs, npoints, M_ONE, psi(1, 1), nreal, pmat%projectors(1, 1), npoints, &
-        M_ZERO, projection%X(projection)(1, iprojection + 1), nreal)
-
-      ! apply the scale
-      !$omp parallel do private(iproj, ist)
-      do iproj = 1, nprojs
-        do ist = 1, nst
-          projection%X(projection)(ist, iprojection + iproj) = projection%X(projection)(ist, iprojection + iproj)*pmat%scal(iproj)
-        end do
-      end do
-      !$omp end parallel do
-
-      call profiling_count_operations(nreal*nprojs*M_TWO*npoints + nst*nprojs)
 
     end if
 
-    SAFE_DEALLOCATE_A(psi)
-
-    INCR(iprojection, nprojs)
   end do
+
+  SAFE_DEALLOCATE_A(ind)
 
   POP_SUB(X(hamiltonian_base_nlocal_start))
   call profiling_out(prof_vnlpsi_start)
@@ -566,20 +752,16 @@ subroutine X(hamiltonian_base_nlocal_finish)(this, mesh, std, ik, projection, vp
   end if
 #endif
 
-  if(batch_is_packed(vpsib) .and. opencl_is_enabled()) then
+  if(batch_is_packed(vpsib) .and. accel_is_enabled()) then
 
     if(mesh%parallel_in_domains) then
-#ifdef HAVE_OPENCL
-      call opencl_write_buffer(projection%buff_projection, &
+      call accel_write_buffer(projection%buff_projection, &
         this%full_projection_size*vpsib%pack%size_real(1), projection%X(projection))
-#endif
       SAFE_DEALLOCATE_A(projection%X(projection))
     end if
 
-#ifdef HAVE_OPENCL
     call finish_opencl()
-    call opencl_release_buffer(projection%buff_projection)
-#endif
+    call accel_release_buffer(projection%buff_projection)
     
     POP_SUB(X(hamiltonian_base_nlocal_finish))
     call profiling_out(prof_vnlpsi_finish)
@@ -659,11 +841,10 @@ subroutine X(hamiltonian_base_nlocal_finish)(this, mesh, std, ik, projection, vp
 contains
 
   subroutine finish_opencl()
-#ifdef HAVE_OPENCL
     integer :: wgsize, imat, iregion, size
     type(profile_t), save :: cl_prof
-    type(octcl_kernel_t), save :: ker_proj_ket, ker_proj_ket_phase
-    type(cl_kernel) :: kernel
+    type(accel_kernel_t), save, target :: ker_proj_ket, ker_proj_ket_phase
+    type(accel_kernel_t), pointer :: kernel
 
     PUSH_SUB(X(hamiltonian_base_nlocal_finish).finish_opencl)
 
@@ -674,40 +855,40 @@ contains
     call profiling_in(cl_prof, "CL_PROJ_KET")
 
     if(allocated(this%projector_phases)) then
-      call octcl_kernel_start_call(ker_proj_ket_phase, 'projector.cl', 'projector_ket_phase')
-      kernel = octcl_kernel_get_ref(ker_proj_ket_phase)
+      call accel_kernel_start_call(ker_proj_ket_phase, 'projector.cl', 'projector_ket_phase')
+      kernel => ker_proj_ket_phase
       size = vpsib%pack%size(1)
       ASSERT(R_TYPE_VAL == TYPE_CMPLX)
     else
-      call octcl_kernel_start_call(ker_proj_ket, 'projector.cl', 'projector_ket')
-      kernel = octcl_kernel_get_ref(ker_proj_ket)
+      call accel_kernel_start_call(ker_proj_ket, 'projector.cl', 'projector_ket')
+      kernel => ker_proj_ket
       size = vpsib%pack%size_real(1)
     end if
 
     do iregion = 1, this%nregions
       
-      call opencl_set_kernel_arg(kernel, 0, this%nprojector_matrices)
-      call opencl_set_kernel_arg(kernel, 1, this%regions(iregion) - 1)
-      call opencl_set_kernel_arg(kernel, 2, this%buff_offsets)
-      call opencl_set_kernel_arg(kernel, 3, this%buff_matrices)
-      call opencl_set_kernel_arg(kernel, 4, this%buff_maps)
-      call opencl_set_kernel_arg(kernel, 5, projection%buff_projection)
-      call opencl_set_kernel_arg(kernel, 6, log2(size))
-      call opencl_set_kernel_arg(kernel, 7, vpsib%pack%buffer)
-      call opencl_set_kernel_arg(kernel, 8, log2(size))
+      call accel_set_kernel_arg(kernel, 0, this%nprojector_matrices)
+      call accel_set_kernel_arg(kernel, 1, this%regions(iregion) - 1)
+      call accel_set_kernel_arg(kernel, 2, this%buff_offsets)
+      call accel_set_kernel_arg(kernel, 3, this%buff_matrices)
+      call accel_set_kernel_arg(kernel, 4, this%buff_maps)
+      call accel_set_kernel_arg(kernel, 5, projection%buff_projection)
+      call accel_set_kernel_arg(kernel, 6, log2(size))
+      call accel_set_kernel_arg(kernel, 7, vpsib%pack%buffer)
+      call accel_set_kernel_arg(kernel, 8, log2(size))
 
       if(allocated(this%projector_phases)) then
-        call opencl_set_kernel_arg(kernel, 9, this%buff_projector_phases)
-        call opencl_set_kernel_arg(kernel, 10, (ik - std%kpt%start)*this%total_points)
+        call accel_set_kernel_arg(kernel, 9, this%buff_projector_phases)
+        call accel_set_kernel_arg(kernel, 10, (ik - std%kpt%start)*this%total_points)
       end if
 
-      wgsize = opencl_kernel_workgroup_size(kernel)/size    
+      wgsize = accel_kernel_workgroup_size(kernel)/size    
 
-      call opencl_kernel_run(kernel, &
+      call accel_kernel_run(kernel, &
         (/size, pad(this%max_npoints, wgsize), this%regions(iregion + 1) - this%regions(iregion)/), &
         (/size, wgsize, 1/))
       
-      call opencl_finish()
+      call accel_finish()
       
     end do
     
@@ -720,12 +901,11 @@ contains
     end do
 
     call batch_pack_was_modified(vpsib)
-    call opencl_finish()
+    call accel_finish()
 
     call profiling_out(cl_prof)
 
     POP_SUB(X(hamiltonian_base_nlocal_finish).finish_opencl)
-#endif
   end subroutine finish_opencl
 
 end subroutine X(hamiltonian_base_nlocal_finish)
@@ -872,6 +1052,196 @@ subroutine X(hamiltonian_base_nlocal_force)(this, mesh, st, geo, iqn, ndim, psi1
   POP_SUB(X(hamiltonian_base_nlocal_force))
   call profiling_out(prof_matelement)
 end subroutine X(hamiltonian_base_nlocal_force)
+
+! ---------------------------------------------------------------------------------------
+
+subroutine X(hamiltonian_base_nlocal_position_commutator)(this, mesh, std, ik, psib, commpsib)
+  type(hamiltonian_base_t), target, intent(in)    :: this
+  type(mesh_t),                     intent(in)    :: mesh
+  type(states_dim_t),               intent(in)    :: std
+  integer,                          intent(in)    :: ik
+  type(batch_t),                    intent(in)    :: psib
+  type(batch_t),                    intent(inout) :: commpsib(:)
+
+  integer :: ist, ip, iproj, imat, nreal, iprojection, idir
+  integer :: npoints, nprojs, nst
+  integer, allocatable :: ind(:)
+  R_TYPE :: aa, bb, cc, dd
+  R_TYPE, allocatable :: projections(:, :, :)
+  R_TYPE, allocatable :: psi(:, :, :)
+  CMPLX :: phase
+  type(projector_matrix_t), pointer :: pmat
+  type(profile_t), save :: prof, reduce_prof
+  integer :: padnprojs, wgsize, lnprojs, size
+  type(profile_t), save :: cl_prof
+  type(accel_kernel_t), save :: ker_proj_bra, ker_proj_bra_phase
+
+  if(.not. this%apply_projector_matrices) return
+
+  call profiling_in(prof, "COMMUTATOR")
+  PUSH_SUB(X(hamiltonian_base_nlocal_position_commutator))
+
+  ASSERT(batch_is_packed(psib))
+
+  nst = psib%nst_linear
+#ifdef R_TCOMPLEX
+  nreal = 2*nst
+#else
+  nreal = nst
+#endif
+
+  if(batch_is_packed(psib) .and. accel_is_enabled()) call messages_not_implemented('OpenCL commutator')
+
+  SAFE_ALLOCATE(projections(1:nst, 1:this%full_projection_size, 0:3))
+  projections = M_ZERO
+
+  SAFE_ALLOCATE(ind(1:this%nprojector_matrices))
+
+  iprojection = 0
+  do imat = 1, this%nprojector_matrices
+    pmat => this%projector_matrices(imat)
+    npoints = pmat%npoints
+    nprojs = pmat%nprojs
+    ind(imat) = iprojection
+    iprojection = iprojection + nprojs
+    !    call profiling_count_operations(nprojs*(R_ADD + R_MUL)*npoints + nst*nprojs)
+  end do
+
+  !$omp parallel do private(imat, pmat, iprojection, npoints, nprojs, iproj, ist, aa, bb, cc, dd, ip)
+  do imat = 1, this%nprojector_matrices
+    pmat => this%projector_matrices(imat)
+    iprojection = ind(imat)
+    npoints = pmat%npoints
+    nprojs = pmat%nprojs
+
+    if(npoints == 0) cycle
+
+    if(.not. allocated(this%projector_phases)) then
+      do iproj = 1, nprojs
+
+        do ist = 1, nst
+          aa = CNST(0.0)
+          bb = CNST(0.0)
+          cc = CNST(0.0)
+          dd = CNST(0.0)
+          do ip = 1, npoints
+            aa = aa + pmat%projectors(ip, iproj)*psib%pack%X(psi)(ist, pmat%map(ip))
+            bb = bb + pmat%projectors(ip, iproj)*pmat%position(1, ip)*psib%pack%X(psi)(ist, pmat%map(ip))
+            cc = cc + pmat%projectors(ip, iproj)*pmat%position(2, ip)*psib%pack%X(psi)(ist, pmat%map(ip))
+            dd = dd + pmat%projectors(ip, iproj)*pmat%position(3, ip)*psib%pack%X(psi)(ist, pmat%map(ip))
+          end do
+          projections(ist, iprojection + iproj, 0) = pmat%scal(iproj)*aa
+          projections(ist, iprojection + iproj, 1) = pmat%scal(iproj)*bb
+          projections(ist, iprojection + iproj, 2) = pmat%scal(iproj)*cc
+          projections(ist, iprojection + iproj, 3) = pmat%scal(iproj)*dd
+        end do
+
+      end do
+
+    else
+
+      do iproj = 1, nprojs
+
+        do ist = 1, nst
+          aa = CNST(0.0)
+          bb = CNST(0.0)
+          cc = CNST(0.0)
+          dd = CNST(0.0)
+          do ip = 1, npoints
+            phase = this%projector_phases(ip, imat, ik)
+            aa = aa + pmat%projectors(ip, iproj)*psib%pack%X(psi)(ist, pmat%map(ip))*phase
+            bb = bb + pmat%projectors(ip, iproj)*pmat%position(1, ip)*psib%pack%X(psi)(ist, pmat%map(ip))*phase
+            cc = cc + pmat%projectors(ip, iproj)*pmat%position(2, ip)*psib%pack%X(psi)(ist, pmat%map(ip))*phase
+            dd = dd + pmat%projectors(ip, iproj)*pmat%position(3, ip)*psib%pack%X(psi)(ist, pmat%map(ip))*phase
+          end do
+          projections(ist, iprojection + iproj, 0) = pmat%scal(iproj)*aa
+          projections(ist, iprojection + iproj, 1) = pmat%scal(iproj)*bb
+          projections(ist, iprojection + iproj, 2) = pmat%scal(iproj)*cc
+          projections(ist, iprojection + iproj, 3) = pmat%scal(iproj)*dd
+        end do
+
+      end do
+    end if
+
+  end do
+
+  ! reduce the projections
+  if(mesh%parallel_in_domains) then
+    call profiling_in(reduce_prof, "COMMUTATOR_REDUCE")
+    call comm_allreduce(mesh%mpi_grp%comm, projections)
+    call profiling_out(reduce_prof)
+  end if
+
+  iprojection = 0
+  do imat = 1, this%nprojector_matrices
+    pmat => this%projector_matrices(imat)
+
+    npoints = pmat%npoints
+    nprojs = pmat%nprojs
+
+    if(npoints /=  0) then
+
+      SAFE_ALLOCATE(psi(1:nst, 1:npoints, 0:3))
+
+      ! Matrix-multiply again.
+      ! the line below does: psi = matmul(projection, transpose(pmat%projectors))
+      call blas_gemm('N', 'T', nreal, npoints, nprojs, &
+        M_ONE, projections(1, iprojection + 1, 0), nreal, pmat%projectors(1, 1), npoints, &
+        M_ZERO, psi(1, 1, 0), nreal)
+
+      call blas_gemm('N', 'T', nreal, npoints, nprojs, &
+        M_ONE, projections(1, iprojection + 1, 1), nreal, pmat%projectors(1, 1), npoints, &
+        M_ZERO, psi(1, 1, 1), nreal)
+
+      call blas_gemm('N', 'T', nreal, npoints, nprojs, &
+        M_ONE, projections(1, iprojection + 1, 2), nreal, pmat%projectors(1, 1), npoints, &
+        M_ZERO, psi(1, 1, 2), nreal)
+
+      call blas_gemm('N', 'T', nreal, npoints, nprojs, &
+        M_ONE, projections(1, iprojection + 1, 3), nreal, pmat%projectors(1, 1), npoints, &
+        M_ZERO, psi(1, 1, 3), nreal)
+            
+      call profiling_count_operations(nreal*nprojs*M_TWO*npoints*4)
+
+      if(allocated(this%projector_phases)) then
+        do idir = 0, 3
+          !$omp parallel do private(ip, ist, phase)
+          do ip = 1, npoints
+            phase = conjg(this%projector_phases(ip, imat, ik))
+            forall(ist = 1:nst)
+              psi(ist, ip, idir) = phase*psi(ist, ip, idir)
+            end forall
+          end do
+          !$omp end parallel do
+        end do
+      end if
+
+      do idir = 1, 3
+        
+        do ip = 1, npoints
+          forall(ist = 1:nst)
+            commpsib(idir)%pack%X(psi)(ist, pmat%map(ip)) = commpsib(idir)%pack%X(psi)(ist, pmat%map(ip)) &
+              - psi(ist, ip, idir) + pmat%position(idir, ip)*psi(ist, ip, 0)
+          end forall
+        end do
+        
+        call batch_pack_was_modified(commpsib(idir))
+      end do
+
+      call profiling_count_operations(nst*npoints*9*R_ADD)
+    end if
+    
+    SAFE_DEALLOCATE_A(psi)
+    
+    INCR(iprojection, nprojs)
+  end do
+
+  SAFE_DEALLOCATE_A(ind)
+
+  call profiling_out(prof)
+  POP_SUB(X(hamiltonian_base_nlocal_position_commutator))
+end subroutine X(hamiltonian_base_nlocal_position_commutator)
+
 
 !! Local Variables:
 !! mode: f90

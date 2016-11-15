@@ -1,5 +1,5 @@
 # -*- coding: utf-8 mode: shell-script -*-
-# $Id: 03-localtarget.05-oct-mp.inp 14775 2015-11-14 19:05:32Z xavier $
+# $Id: 03-localtarget.05-oct-mp.inp 15690 2016-10-25 21:56:26Z xavier $
 
 
 Dimensions = 1
@@ -70,7 +70,7 @@ OCTInitialState = oct_is_groundstate
 OCTTargetOperator = oct_tg_jdensity
 OCTTargetDensity = "exp(-x^2)"
 
-OCTScheme  = oct_algorithm_zr98
+OCTScheme  = oct_zr98
 OCTDoubleCheck = no
 
 #----------------------------
@@ -96,6 +96,6 @@ electric_field | 1 | 0 | 0 | freq | "envelope_function"
 #Output = density + wfs
 #OutputFormat = axis_x
 
+ProfilingMode = prof_time
 
-
-
+DisableOpenCL = yes

@@ -16,73 +16,11 @@
  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
  02110-1301, USA.
 
- $Id: mesh_batch.cl 14305 2015-06-22 15:56:28Z dstrubbe $
+ $Id: mesh_batch.cl 15489 2016-07-18 06:39:53Z xavier $
 */
 
 #include <cl_global.h>
 #include <cl_complex.h>
-
-__kernel void ddot_vector(const int np,
-			  const int npblock,
-			  const __global double * restrict xx, const int ldxx,
-			  const __global double * restrict yy, const int ldyy,
-			  __global double * restrict dot,
-			  __local double * restrict lsum){
-  
-  const int ist = get_global_id(0);
-  const int lip = get_local_id(1);
-  const int nlp = get_local_size(1);
-  const int startp = npblock*get_global_id(2);
-  const int endp = (startp + npblock < np)?startp + npblock:np;
-
-  double tmp;
-
-  tmp = 0.0;
-  for(int ip = lip + startp; ip < endp; ip += nlp){
-    tmp += xx[(ip<<ldxx) + ist]*yy[(ip<<ldyy) + ist];
-  }
-
-  lsum[(lip<<ldyy) + ist] = tmp;
-
-  barrier(CLK_LOCAL_MEM_FENCE);
-
-  if(lip == 0){
-    tmp = 0.0;
-    for(int ip = 0; ip < nlp; ip++) tmp += lsum[(ip<<ldyy) + ist];
-    dot[ist + (get_global_id(2)<<ldyy)] = tmp;
-  }
-}
-
-__kernel void zdot_vector(const int np,
-			  const int npblock,
-			  const __global double2 * restrict xx, const int ldxx,
-			  const __global double2 * restrict yy, const int ldyy,
-			  __global double2 * restrict dot,
-			  __local double2 * restrict lsum){
-  
-  const int ist = get_global_id(0);
-  const int lip = get_local_id(1);
-  const int nlp = get_local_size(1);
-  const int startp = npblock*get_global_id(2);
-  const int endp = (startp + npblock < np)?startp + npblock:np;
-
-  double2 tmp;
-
-  tmp = 0.0;
-  for(int ip = lip + startp; ip < endp; ip += nlp){
-    tmp += complex_mul(complex_conj(xx[(ip<<ldxx) + ist]), yy[(ip<<ldyy) + ist]);
-  }
-
-  lsum[(lip<<ldyy) + ist] = tmp;
-
-  barrier(CLK_LOCAL_MEM_FENCE);
-
-  if(lip == 0){
-    tmp = 0.0;
-    for(int ip = 0; ip < nlp; ip++) tmp += lsum[(ip<<ldyy) + ist];
-    dot[ist + (get_global_id(2)<<ldyy)] = tmp;
-  }
-}
 
 
 __kernel void ddot_matrix(const int np,
@@ -137,37 +75,15 @@ __kernel void zdot_matrix_spinors(const int np,
   for(int ip = 0; ip < np; ip++){
     double4 a1 = xx[(ip<<ldxx) + ist];
     double4 a2 = yy[(ip<<ldyy) + jst];
-    tmp1 += complex_mul(complex_conj((double2)(a1.s0, a1.s1)), (double2)(a2.s0, a2.s1));
-    tmp2 += complex_mul(complex_conj((double2)(a1.s2, a1.s3)), (double2)(a2.s2, a2.s3));
+#ifdef CUDA
+    tmp1 += complex_mul(complex_conj(double2(a1.x, a1.y)), double2(a2.x, a2.y));
+    tmp2 += complex_mul(complex_conj(double2(a1.z, a1.w)), double2(a2.z, a2.w));
+#else
+    tmp1 += complex_mul(complex_conj((double2)(a1.x, a1.y)), (double2)(a2.x, a2.y));
+    tmp2 += complex_mul(complex_conj((double2)(a1.z, a1.w)), (double2)(a2.z, a2.w));
+#endif
   }
   dot[ist + lddot*jst] = tmp1 + tmp2;
-}
-
-
-__kernel void nrm2_vector(const int np,
-			  const __global double * restrict xx, const int ldxx,
-			  __global double * restrict nrm2){
-  
-  const int ist = get_global_id(0);
-  const int ir  = get_global_id(1);
-  const int nr  = get_global_size(1);
-
-  double ssq, scale;
-
-  ssq = 1.0;
-  scale = 0.0;
-  for(int ip = ir; ip < np; ip += nr){
-    double a0 = xx[(ip<<ldxx) + ist];
-    if(a0 == 0.0) continue;
-    a0 = (a0 > 0.0)?a0:-a0;
-    if(scale < a0){
-      ssq = 1.0 + ssq*(scale/a0)*(scale/a0);
-      scale = a0;
-    } else {
-      ssq = ssq + (a0/scale)*(a0/scale);
-    }
-  }
-  nrm2[ist + (ir<<ldxx)] = scale*scale*ssq;
 }
 
 /*

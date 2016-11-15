@@ -16,48 +16,52 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: poisson.F90 14884 2015-12-23 20:01:32Z xavier $
+!! $Id: poisson.F90 15718 2016-11-06 09:11:21Z xavier $
 
 #include "global.h"
 
-module poisson_m
-  use batch_m
-  use boundaries_m
-  use cube_m
-  use derivatives_m
-  use fft_m
-  use global_m
-  use index_m
-  use io_m
-  use io_function_m
-  use loct_math_m
-  use math_m
-  use mesh_m
-  use mesh_cube_parallel_map_m
-  use mesh_function_m
-  use messages_m
-  use mpi_m
-  use multicomm_m
-  use opencl_m
-  use par_vec_m
-  use parser_m
-  use partition_m
-  use poisson_cg_m
-  use poisson_corrections_m
-  use poisson_isf_m
-  use poisson_fft_m
-  use poisson_fmm_m
-  use poisson_libisf_m
-  use poisson_multigrid_m
-  use poisson_no_m
-  use profiling_m
-  use simul_box_m
-  use test_parameters_m
-  use types_m
-  use unit_m
-  use unit_system_m
-  use varinfo_m
+module poisson_oct_m
+  use batch_oct_m
+  use boundaries_oct_m
+  use cube_oct_m
+  use cube_function_oct_m
+  use derivatives_oct_m
+  use fft_oct_m
+  use global_oct_m
+  use index_oct_m
+  use io_oct_m
+  use io_function_oct_m
+  use loct_math_oct_m
+  use math_oct_m
+  use mesh_oct_m
+  use mesh_cube_parallel_map_oct_m
+  use mesh_function_oct_m
+  use messages_oct_m
+  use mpi_oct_m
+  use multicomm_oct_m
+  use par_vec_oct_m
+  use parser_oct_m
+  use partition_oct_m
+  use poisson_cg_oct_m
+  use poisson_corrections_oct_m
+  use poisson_isf_oct_m
+  use poisson_fft_oct_m
+  use poisson_fmm_oct_m
+  use poisson_libisf_oct_m
+  use poisson_multigrid_oct_m
+  use poisson_no_oct_m
+  use profiling_oct_m
+  use simul_box_oct_m
+  use test_parameters_oct_m
+  use types_oct_m
+  use unit_oct_m
+  use unit_system_oct_m
+  use varinfo_oct_m
 
+#ifdef HAVE_POKE
+  use poke
+#endif
+  
   implicit none
 
   private
@@ -93,8 +97,8 @@ module poisson_m
     POISSON_CG_CORRECTED  =  6,         &
     POISSON_MULTIGRID     =  7,         &
     POISSON_ISF           =  8,         &
-    POISSON_SETE          =  9,         &
     POISSON_LIBISF        = 10,         &
+    POISSON_POKE          = 11,         &
     POISSON_NO            = -99,        &
     POISSON_NULL          = -999
   
@@ -120,6 +124,10 @@ module poisson_m
     integer         :: intercomm
     type(mpi_grp_t) :: local_grp
     logical         :: root
+#endif
+#ifdef HAVE_POKE
+    type(PokeGrid)   :: poke_grid
+    type(PokeSolver) :: poke_solver
 #endif
   end type poisson_t
 
@@ -211,8 +219,6 @@ contains
     !% Multigrid method (only for finite systems).
     !%Option isf 8
     !% Interpolating Scaling Functions Poisson solver (only for finite systems).
-    !%Option sete 9
-    !% (Obsolete) SETE solver.
     !%Option libisf 10
     !% Meant to be exactly the same as Interpolating
     !% Scaling Functions (isf) Poisson solver, but using an external
@@ -221,6 +227,8 @@ contains
     !% found in <a href=http://www.tddft.org/programs/octopus/wiki/index.php/Manual:Specific_architectures>Octopus</a>
     !% and <a href=http://bigdft.org/Wiki/index.php?title=Installation#Building_the_Poisson_Solver_library_only>
     !% BigDFT</a> documentation. Tested with the version bigdft-1.7.6.
+    !%Option poke 11
+    !% (Experimental) Solver from the Poke library.
     !%End
 
     default_solver = POISSON_FFT
@@ -229,10 +237,10 @@ contains
     
     if(der%mesh%sb%dim > 3) default_solver = POISSON_CG_CORRECTED
 
-#ifdef HAVE_CLAMDFFT
+#ifdef HAVE_CLFFT
     ! this is disabled, since the difference between solvers are big
     ! enough to cause problems with the tests.
-    ! if(opencl_is_enabled()) default_solver = POISSON_FFT
+    ! if(accel_is_enabled()) default_solver = POISSON_FFT
 #endif
 
     if(der%mesh%use_curvilinear) then
@@ -266,14 +274,14 @@ contains
       str = "multigrid"
     case (POISSON_ISF)
       str = "interpolating scaling functions"
-    case (POISSON_SETE)
-      str = "SETE"
     case (POISSON_LIBISF)
       str = "interpolating scaling functions (from BigDFT)"
     case (POISSON_NO)
       str = "no Poisson solver - Hartree set to 0"
+    case (POISSON_POKE)
+      str = "Poke library"
     end select
-    write(message(1),'(a,a,a)') "The chosen Poisson solver is '",trim(str),"'"
+    write(message(1),'(a,a,a)') "The chosen Poisson solver is '", trim(str), "'"
     call messages_info(1)
 
     if(this%method /= POISSON_FFT) then
@@ -433,11 +441,6 @@ contains
         call messages_warning(4)
       end if
 
-      if (this%method == POISSON_SETE) then
-        message(1) = 'SETE poisson solver is obsolete and has been removed.'
-        call messages_fatal(1)
-      end if
-
       if (this%method == POISSON_FMM) then
         call messages_experimental('FMM Poisson solver')
       end if
@@ -547,6 +550,20 @@ contains
 
     end if
 
+    if(this%method == POISSON_POKE) then
+#ifndef HAVE_POKE
+      call messages_write('Octopus was compiled without Poke support, you cannot use', new_line = .true.)
+      call messages_write("  'PoissonSolver = poke'. ")
+      call messages_fatal()
+#endif
+
+      call messages_experimental('Poke library')
+      ASSERT(der%mesh%sb%dim == 3)
+      box(1:der%mesh%sb%dim) = der%mesh%idx%ll(1:der%mesh%sb%dim)
+      need_cube = .true.
+      fft_type = FFTLIB_NONE
+    end if
+
     ! Create the cube
     if (need_cube) then
       call cube_init(this%cube, box, der%mesh%sb, fft_type = fft_type, verbose = .true., &
@@ -556,6 +573,20 @@ contains
       end if
     end if
 
+    if(this%method == POISSON_POKE) then
+
+#ifdef HAVE_POKE      
+      this%poke_grid = PokeGrid(der%mesh%spacing, this%cube%rs_n)
+      if(der%mesh%sb%periodic_dim > 0) then
+        call this%poke_grid%set_boundaries(POKE_BOUNDARIES_PERIODIC)
+      else
+        call this%poke_grid%set_boundaries(POKE_BOUNDARIES_FREE)
+      end if
+      this%poke_solver = PokeSolver(this%poke_grid)
+      call this%poke_solver%build()
+#endif
+    end if
+    
     call poisson_kernel_init(this, mc%master_comm)
 
     POP_SUB(poisson_init)
@@ -598,6 +629,12 @@ contains
     case(POISSON_NO)
       call poisson_no_end(this%no_solver)
 
+    case(POISSON_POKE)
+#ifdef HAVE_POKE
+      call this%poke_grid%end()
+      call this%poke_solver%end()
+#endif
+      
     end select
     this%method = POISSON_NULL
 
@@ -728,7 +765,7 @@ contains
     !! its calculations? (Defaults to .true.)
     logical, optional,    intent(in)    :: all_nodes 
     type(derivatives_t), pointer :: der
-
+    type(cube_function_t) :: crho, cpot
     FLOAT, allocatable :: rho_corrected(:), vh_correction(:)
 
     logical               :: all_nodes_value
@@ -814,7 +851,20 @@ contains
       else ! "D" Distributed version
         call poisson_libisf_parallel_solve(this%libisf_solver, der%mesh, this%cube, pot, rho, this%mesh_cube_map)
       end if
-    
+
+    case(POISSON_POKE)
+      call cube_function_null(crho)
+      call cube_function_null(cpot)
+      call dcube_function_alloc_RS(this%cube, crho)
+      call dcube_function_alloc_RS(this%cube, cpot)
+      call dmesh_to_cube(der%mesh, rho, this%cube, crho)
+#if HAVE_POKE
+      call this%poke_solver%solve(crho%drs, cpot%drs)
+#endif
+      call dcube_to_mesh(this%cube, cpot, der%mesh, pot)
+      call dcube_function_free_RS(this%cube, crho)
+      call dcube_function_free_RS(this%cube, cpot)
+      
     case(POISSON_NO)
       call poisson_no_solve(this%no_solver, der%mesh, this%cube, pot, rho)
     end select
@@ -968,10 +1018,10 @@ contains
     
     call dio_function_output (io_function_fill_how('AxisX'), ".", "poisson_test_rho", mesh, rho, unit_one, ierr)
     call dio_function_output (io_function_fill_how('AxisX'), ".", "poisson_test_exact", mesh, vh_exact, unit_one, ierr)
-    call dio_function_output (io_function_fill_how('AxisX'), ".", "poisson_tedist%numerical", mesh, vh, unit_one, ierr)
+    call dio_function_output (io_function_fill_how('AxisX'), ".", "poisson_test_numerical", mesh, vh, unit_one, ierr)
     call dio_function_output (io_function_fill_how('AxisY'), ".", "poisson_test_rho", mesh, rho, unit_one, ierr)
     call dio_function_output (io_function_fill_how('AxisY'), ".", "poisson_test_exact", mesh, vh_exact, unit_one, ierr)
-    call dio_function_output (io_function_fill_how('AxisY'), ".", "poisson_tedist%numerical", mesh, vh, unit_one, ierr)
+    call dio_function_output (io_function_fill_how('AxisY'), ".", "poisson_test_numerical", mesh, vh, unit_one, ierr)
     ! not dimensionless, but no need for unit conversion for a test routine
 
     SAFE_DEALLOCATE_A(rho)
@@ -1155,7 +1205,7 @@ contains
 #include "poisson_inc.F90"
 #include "solver_1d_solve_inc.F90"
 
-end module poisson_m
+end module poisson_oct_m
 
 !! Local Variables:
 !! mode: f90

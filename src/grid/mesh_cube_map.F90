@@ -15,22 +15,19 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: mesh_cube_map.F90 15007 2016-01-08 00:09:38Z xavier $
+!! $Id: mesh_cube_map.F90 15474 2016-07-12 04:33:08Z xavier $
 
 #include "global.h"
 
-module mesh_cube_map_m
-#ifdef HAVE_OPENCL
-  use cl
-#endif
-  use global_m
-  use index_m
-  use messages_m
-  use mpi_m
-  use opencl_m
-  use profiling_m
-  use simul_box_m
-  use types_m
+module mesh_cube_map_oct_m
+  use accel_oct_m
+  use global_oct_m
+  use index_oct_m
+  use messages_oct_m
+  use mpi_oct_m
+  use profiling_oct_m
+  use simul_box_oct_m
+  use types_oct_m
 
   implicit none
 
@@ -43,7 +40,7 @@ module mesh_cube_map_m
   type mesh_cube_map_t
     integer            :: nmap      !< The number of maps
     integer, pointer   :: map(:, :)
-    type(opencl_mem_t) :: map_buffer
+    type(accel_mem_t) :: map_buffer
   end type mesh_cube_map_t
 
   integer, public, parameter :: MCM_POINT = 4, MCM_COUNT = 5
@@ -90,11 +87,9 @@ contains
         end do
       end do
 
-      if(opencl_is_enabled()) then
-#ifdef HAVE_OPENCL
-        call opencl_create_buffer(this%map_buffer, CL_MEM_READ_ONLY, TYPE_INTEGER, this%nmap*5)
-        call opencl_write_buffer(this%map_buffer, this%nmap*5, this%map)
-#endif
+      if(accel_is_enabled()) then
+        call accel_create_buffer(this%map_buffer, ACCEL_MEM_READ_ONLY, TYPE_INTEGER, this%nmap*5)
+        call accel_write_buffer(this%map_buffer, this%nmap*5, this%map)
       end if
 
     else
@@ -115,11 +110,7 @@ contains
 
       SAFE_DEALLOCATE_P(this%map)
       
-      if(opencl_is_enabled()) then
-#ifdef HAVE_OPENCL
-        call opencl_release_buffer(this%map_buffer)
-#endif
-      end if
+      if(accel_is_enabled()) call accel_release_buffer(this%map_buffer)
 
     end if
 
@@ -128,7 +119,7 @@ contains
 
   ! ---------------------------------------------------------
   
-end module mesh_cube_map_m
+end module mesh_cube_map_oct_m
 
 !! Local Variables:
 !! mode: f90

@@ -17,7 +17,7 @@
 ## Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 ## 02110-1301, USA.
 ##
-## $Id: Makefile.am 14974 2016-01-05 05:48:47Z xavier $
+## $Id: Makefile.am 15514 2016-07-22 06:10:20Z xavier $
 
 noinst_LIBRARIES = libbasic.a
 
@@ -57,30 +57,28 @@ libbasic_a_SOURCES =     \
 	oct_f.c          \
 	oct_gdlib_f.c    \
 	write_iter.F90   \
-	write_iter_low.c \
+	write_iter_low.cc \
 	varinfo_low.c    \
 	signals.c        \
 	io_binary_f.F90  \
 	io_csv_f.F90     \
 	lookup.F90       \
 	types.F90        \
-	opencl.F90       \
+	accel.F90       \
 	space.F90        \
 	blacs.F90        \
 	blacs_proc_grid.F90  \
 	comm.F90             \
-	octcl_kernel.F90     \
 	openscad.F90         \
 	polyhedron.F90       \
 	xml.F90              \
 	xml_low.c            \
 	test_parameters.F90  \
 	sort.F90             \
-	debug.F90
-
-if COMPILE_PAPI
-libbasic_a_SOURCES += papi.c papi_f.F90
-endif
+	sort_low.cc          \
+	debug.F90            \
+	cuda.cc              \
+	cublas.cc
 
 noinst_HEADERS =               \
 	mpi_debug_inc.F90      \
@@ -89,7 +87,7 @@ noinst_HEADERS =               \
 	varia.h                \
 	io_binary.h            \
 	comm_inc.F90           \
-	opencl_inc.F90         \
+	accel_inc.F90         \
         io_binary_f_inc.F90    \
 	sort_inc.F90
 
@@ -121,9 +119,8 @@ debug.o : debug.F90 global.o parser.o
 unit.o : unit.F90 global.o
 parser.o : parser.F90 mpi.o loct.o global.o unit.o varinfo.F90
 messages.o : messages.F90 varinfo.o string.o mpi.o parser.o loct.o global.o unit.o debug.o
-papi_f.o : papi_f.F90
 sort.o : sort.F90 sort_inc.F90 messages.o global.o
-profiling.o : profiling.F90 mpi.o messages.o loct.o io.o global.o papi_f.o types.o sort.o
+profiling.o : profiling.F90 mpi.o messages.o loct.o io.o global.o types.o sort.o
 
 command_line.o : command_line.F90 messages.o profiling.o
 io.o : io.F90 mpi.o messages.o parser.o loct.o global.o  
@@ -136,8 +133,7 @@ path.o : path.F90 loct.o messages.o profiling.o global.o
 json.o : json.F90 kinds.o io.o messages.o profiling.o global.o
 json_parser.o : json_parser.F90 json.o kinds.o io.o messages.o profiling.o global.o
 
-opencl.o : opencl.F90 opencl_inc.F90 global.o types.o profiling.o messages.o parser.o mpi.o io.o unit_system.o
-octcl_kernel.o : octcl_kernel.F90 opencl.o global.o
+accel.o : accel.F90 accel_inc.F90 global.o types.o profiling.o messages.o parser.o mpi.o io.o unit_system.o
 mpi_debug.o : mpi_debug.F90 mpi_debug_inc.F90 mpi.o messages.o loct.o global.o 
 mpi_lib.o : mpi_lib.F90 mpi_lib_inc.F90 mpi_debug.o mpi.o messages.o global.o profiling.o
 topology.o : topology.F90 utils.o mpi.o messages.o parser.o io.o global.o  profiling.o

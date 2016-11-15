@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: pes_mask_out_inc.F90 15009 2016-01-08 09:32:49Z umberto $
+!! $Id: pes_mask_out_inc.F90 15648 2016-10-14 10:34:30Z rozzi $
 
 
 
@@ -82,7 +82,6 @@ subroutine pes_mask_pmesh(dim, kpoints, ll, LG, pmesh, idxZero, krng, Lp)
 
   integer :: nkpt, kpth_dir
   FLOAT :: zero_thr
-  logical :: kpath_has_gamma
 
 
   PUSH_SUB(pes_mask_pmesh)
@@ -99,7 +98,6 @@ subroutine pes_mask_pmesh(dim, kpoints, ll, LG, pmesh, idxZero, krng, Lp)
   kpt(:) = M_ZERO
       
   zero_thr = M_EPSILON    
-  kpath_has_gamma = .false.
       
   if ( kpoints_have_zero_weight_path(kpoints)) then 
     ! supporting paths only along the kx and ky directions in 
@@ -114,18 +112,12 @@ subroutine pes_mask_pmesh(dim, kpoints, ll, LG, pmesh, idxZero, krng, Lp)
     do ik = 1 , nkpt
       Lkpt(krng(1)+ik-1,kpth_dir) = ik
       kpt(1:dim) = kpoints_get_point(kpoints, krng(1) + ik -1) 
-      if ( sum(kpt(1:dim)**2) <= M_EPSILON )  kpath_has_gamma = .true.
     end do
-    
-    
-    if (.not. kpath_has_gamma) then
-      kpt(1:dim) = kpoints_get_point(kpoints, krng(1))-kpoints_get_point(kpoints, krng(1)+1)
-      zero_thr = sum(kpt(1:dim)**2)
-    end if    
         
   else  
-    call kpoints_grid_generate(dim, kpoints%nik_axis(1:dim), kpoints%shifts(1:dim), &
-                               kpoints%full%red_point,  Lkpt(:,1:dim))
+    
+    call kpoints_grid_generate(dim, kpoints%nik_axis(1:dim), kpoints%full%nshifts, &
+           kpoints%full%shifts(1:dim,1:kpoints%full%nshifts), kpoints%full%red_point,  Lkpt(:,1:dim))
 
 !       do ik = 1, kpoints_number(kpoints)
 !         kpt(1:sb%dim) = kpoints_get_point(kpoints, ik, absolute_coordinates = .true.)
@@ -165,8 +157,12 @@ subroutine pes_mask_pmesh(dim, kpoints, ll, LG, pmesh, idxZero, krng, Lp)
   end do  
   
   if(debug%info) then
-    do j1 = 1, ll(1)
-      print *,j1, "LG = ",LG(j1,1),"LG_ = ",LG_(j1,1), "idx = ", idx(j1,1), "idx_inv = ", idx_inv(j1,1)
+    do idir=1, dim
+      print *, "*** direction =", idir  
+      do j1 = 1, ll(idir)
+        print *,j1, "LG = ",LG(j1,idir),"LG_ = ",LG_(j1,idir), "idx = ", idx(j1,idir), "idx_inv = ", idx_inv(j1,idir)
+      end do
+      print *, "*** *** ***"  
     end do
   end if
 
@@ -242,20 +238,46 @@ subroutine pes_mask_pmesh(dim, kpoints, ll, LG, pmesh, idxZero, krng, Lp)
 !         print *,ip1, "Pmesh", pmesh(ip1, 1, 1, 1)
 !       end do
 
-  if (err == -1) then
-    write(message(1), '(a)') 'Illformed momentum-space mesh: could not find p = 0 coordinate.'
-    call messages_fatal(1)
-  end if 
+  if ( kpoints_have_zero_weight_path(kpoints)) then 
+  ! With a path we just need to get the correct the zero index on the in-plane direction  
+  ! perpendicular to the path since is along this direction that we are going 
+  ! to slice with pes_mask_output_full_mapM_cut. Since on this direction we only 
+  ! have G points I simply need to look for the zero index of the G-grid.
+  ! Note that the G-grid must always include the (0,0,0) point. 
+    do j1 = 1, ll(1) 
+      do j2 = 1, ll(2) 
+        do j3 = 1, ll(3) 
 
-  if (err > 1) then
-    write(message(1), '(a)') 'Illformed momentum-space mesh: more than in point with p = 0 coordinate.'
-    write(message(1), '(a)') 'This can happen only if the kpoint mesh does not contain gamma.'
-    call messages_warning(1)
-  end if 
+          GG(1:3)= (/LG_(j1,1),LG_(j2,2),LG_(j3,3)/)
+          if (sum(GG(1:3)**2)<=M_EPSILON) idxZero(1:3) = (/j1,j2,j3/)
+        
+        end do
+      end do
+    end do
+    
+  else   
+    
+    if (err == -1) then
+      call messages_write('Illformed momentum-space mesh: could not find p = 0 coordinate.')
+      call messages_fatal()
+    end if 
+
+    if (err > 1) then
+      call messages_write('Illformed momentum-space mesh: more than one point with p = 0 coordinate.')
+      call messages_write('This can happen only if the kpoint mesh does not contain gamma.')
+      call messages_warning()
+    end if 
+
+  end if
+
+  if(debug%info) then
+    print * ,"idxZero(1:3)=", idxZero(1:3)
+  end if
+
 
   if (err == -2) then
-    write(message(1), '(a)') 'Illformed momentum-space mesh: two or more points with the same p.'
-    call messages_fatal(1)
+    call messages_write('Illformed momentum-space mesh: two or more points with the same p.')
+    call messages_fatal()
   end if 
   
  
@@ -305,10 +327,6 @@ subroutine pes_mask_map_from_states(restart, st, ll, pesK, krng, Lp, istin)
   ntodo = nkpt * nst 
   idone = 0 
   call loct_progress_bar(-1, ntodo)
-
-  write(message(1), '(a)') 'Read PES restart files.'
-  call messages_info(1)
-
   
   pesK = M_ZERO
   do ik = krng(1), krng(2)
@@ -318,7 +336,7 @@ subroutine pes_mask_map_from_states(restart, st, ll, pesK, krng, Lp, istin)
 
       if (st%d%kweights(ik) < M_EPSILON) then
         ! we have a zero-weight path
-        weight = st%occ(ist, ik)
+        weight = st%occ(ist, ik)!/nkpt
       else
         weight = st%occ(ist, ik) * st%d%kweights(ik)
       end if
@@ -364,7 +382,7 @@ subroutine pes_mask_map_from_states(restart, st, ll, pesK, krng, Lp, istin)
                 pesK(ip(1),ip(2),ip(3), 3) = pesK(ip(1),ip(2),ip(3), 3) &
                                                + real(psiG1(i1,i2,i3)*conjg(psiG2(i1,i2,i3)), REAL_PRECISION) * weight
                                                
-                pesK(ip(1),ip(2),ip(3), 4) = pesK(ip(1),ip(2),ip(3), 4) &
+                pesK(ip(1),ip(2),ip(3), 3) = pesK(ip(1),ip(2),ip(3), 3) &
                                                + aimag(psiG1(i1,i2,i3)*conjg(psiG2(i1,i2,i3))) * weight
             end do
           end do
@@ -785,12 +803,16 @@ subroutine pes_mask_output_full_mapM(pesK, file, Lk, ll, how, sb, pmesh)
   call cube_function_null(cf)
   call dcube_function_alloc_RS(cube, cf, force_alloc = .true.)
   cf%dRS = pesK
-
-  dk(:) = M_ZERO
-  dk(1:sb%dim) = abs(Lk(2,1:sb%dim)-Lk(1,1:sb%dim))
-  do ii = 1, sb%dim
-    dk(ii) = units_from_atomic(sqrt(units_out%energy), dk(ii))
-  end do
+  
+  
+  if (.not. present(pmesh) ) then
+    ! Ignore Lk and use pmesh
+    dk(:) = M_ZERO
+    dk(1:sb%dim) = abs(Lk(2,1:sb%dim)-Lk(1,1:sb%dim))
+    do ii = 1, sb%dim
+      dk(ii) = units_from_atomic(sqrt(units_out%energy), dk(ii))
+    end do
+  end if
   
 #if defined(HAVE_NETCDF)  
   
@@ -812,17 +834,17 @@ subroutine pes_mask_output_full_mapM(pesK, file, Lk, ll, how, sb, pmesh)
     call messages_info(1)
     
     if (present(pmesh)) then          
-      call dvtk_out_cf_structured(filename, ierr, cf, cube,& 
+      call dvtk_out_cf_structured(filename, 'PES_mapM', ierr, cf, cube,& 
         sqrt(units_out%energy)**sb%dim, pmesh, ascii = .false.)
     else 
-      call dvtk_out_cf(filename, ierr, cf, cube, dk(:),& 
+      call dvtk_out_cf(filename, 'PES_mapM', ierr, cf, cube, dk(:),& 
         sqrt(units_out%energy)**sb%dim)
     end if        
       
-  else
-    write(message(1), '(a)') 'Writing ASCII format file: '
-    call messages_info(1)
-    call out_ascii()
+!   else
+!     write(message(1), '(a)') 'Writing ASCII format file: '
+!     call messages_info(1)
+!     call out_ascii()
   end if
   
   call cube_end(cube)
@@ -1881,6 +1903,7 @@ subroutine pes_mask_output(mask, mesh, st, outp, file, gr, geo, iter)
   if (simul_box_is_periodic(mesh%sb)) then
     ! For periodic systems the results must be obtained using
     ! the oct-photoelectron-spectrum routine
+    call profiling_out(prof)
     POP_SUB(pes_mask_output)
     return
   end if
@@ -2092,11 +2115,6 @@ subroutine pes_mask_dump(restart, mask, st, ierr)
   PUSH_SUB(pes_mask_dump)
 
   ierr = 0
-
-  if (restart_skip(restart)) then
-    POP_SUB(pes_mask_dump)
-    return
-  end if
 
   if (debug%info) then
     message(1) = "Debug: Writing PES mask restart."

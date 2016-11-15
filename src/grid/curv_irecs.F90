@@ -22,16 +22,16 @@
 !! coordinate transformation as of 
 !! M. Weinmuller, M. Weinmuller, J. Rohland, and A. Scrinzi, arXiv:1509.04947 (2015).
 
-module curv_irecs_m
-  use geometry_m
-  use global_m
-  use loct_pointer_m
-  use parser_m
-  use messages_m
-  use profiling_m
-  use simul_box_m
-  use unit_m
-  use unit_system_m
+module curv_irecs_oct_m
+  use geometry_oct_m
+  use global_oct_m
+  use loct_pointer_oct_m
+  use parser_oct_m
+  use messages_oct_m
+  use profiling_oct_m
+  use simul_box_oct_m
+  use unit_oct_m
+  use unit_system_oct_m
 
   implicit none
 
@@ -143,7 +143,7 @@ contains
       if (present(phx)) phx(sb%dim) = M_ONE 
     else
       do i=1, sb%dim
-        x(i)   = exp(cv%gamma * (chi(i) - cv%R0))
+        x(i)   = exp(cv%gamma * (chi(i) - cv%R0) + M_ZI*cv%theta)
         if (present(phx)) phx(i) = exp(M_ZI*cv%theta) 
       end do
     end if
@@ -188,7 +188,7 @@ contains
 
   end subroutine curv_irecs_jacobian
 
-end module curv_irecs_m
+end module curv_irecs_oct_m
 
 !! Local Variables:
 !! mode: f90

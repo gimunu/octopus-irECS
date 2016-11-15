@@ -15,13 +15,13 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: symm_op.F90 13468 2015-03-22 06:22:58Z xavier $
+!! $Id: symm_op.F90 15683 2016-10-25 07:40:46Z xavier $
 
 #include "global.h"
 
-module symm_op_m
-  use global_m
-  use messages_m
+module symm_op_oct_m
+  use global_oct_m
+  use messages_oct_m
 
   implicit none
 
@@ -153,10 +153,27 @@ contains
 
   end function symm_op_is_identity
 
+  ! -------------------------------------------------------------------------------
+  
+  pure function isymm_op_apply(this, aa) result(bb)
+    type(symm_op_t),  intent(in)  :: this
+    integer,          intent(in)  :: aa(:) !< (3)
+    integer                       :: bb(1:3)
 
-#include "undef.F90"
-#include "integer.F90"
-#include "symm_op_inc.F90"
+    bb(1:3) = nint(dsymm_op_apply(this, real(aa, REAL_PRECISION)))
+    
+  end function isymm_op_apply
+  
+  ! -------------------------------------------------------------------------------
+
+  function isymm_op_apply_inv(this, aa) result(bb)
+    type(symm_op_t),  intent(in)  :: this
+    integer,          intent(in)  :: aa(:) !< (3)
+    integer                       :: bb(1:3)
+
+    bb(1:3) = nint(dsymm_op_apply_inv(this, real(aa, REAL_PRECISION)))
+    
+  end function isymm_op_apply_inv
 
 #include "undef.F90"
 #include "real.F90"
@@ -166,7 +183,7 @@ contains
 #include "complex.F90"
 #include "symm_op_inc.F90"
 
-end module symm_op_m
+end module symm_op_oct_m
 
 !! Local Variables:
 !! mode: f90

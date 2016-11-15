@@ -16,33 +16,33 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: cube.F90 14976 2016-01-05 14:27:54Z xavier $
+!! $Id: cube.F90 15567 2016-08-03 18:10:30Z xavier $
 
 #include "global.h"
 
-module cube_m
-  use fft_m
-  use global_m
-  use index_m
-  use io_m
-  use messages_m
-  use mpi_m
-  use multicomm_m
-  use nfft_m
-  use opencl_m
-  use parser_m
-  use pfft_m
-  use pnfft_m
-  use profiling_m
-  use simul_box_m
-  use varinfo_m
+module cube_oct_m
+  use accel_oct_m
+  use fft_oct_m
+  use global_oct_m
+  use index_oct_m
+  use io_oct_m
+  use messages_oct_m
+  use mpi_oct_m
+  use multicomm_oct_m
+  use nfft_oct_m
+  use parser_oct_m
+  use pfft_oct_m
+  use pnfft_oct_m
+  use profiling_oct_m
+  use simul_box_oct_m
+  use varinfo_oct_m
 
   implicit none
   private
   public ::             &
     cube_t,             &
     dimensions_t,       &
-    cube_init,          & 
+    cube_init,          &
     cube_point_to_process, &
     cube_partition,     &
     cube_global2local,  &
@@ -73,7 +73,7 @@ module cube_m
 
 
     type(fft_t), pointer :: fft !< the fft object
-    logical :: has_cube_mapping !< Saves if a mapping with the cube is needed. 
+    logical :: has_cube_mapping !< Saves if a mapping with the cube is needed.
                                 !! Until now, is needed with par_states (without par_domains) and PES.
   end type cube_t
 
@@ -83,15 +83,15 @@ module cube_m
   !! mapping between x,y,z index and process is saved, in a compact
   !! way.
   type dimensions_t
-    integer :: start_xyz(1:3) !< First index X, Y, Z, which this process has 
-    integer :: end_xyz(1:3)   !< Last  index X, Y, Z, which this process has 
+    integer :: start_xyz(1:3) !< First index X, Y, Z, which this process has
+    integer :: end_xyz(1:3)   !< Last  index X, Y, Z, which this process has
   end type dimensions_t
 
 contains
 
   ! ---------------------------------------------------------
   subroutine cube_init(cube, nn, sb, fft_type, fft_library, dont_optimize, nn_out, verbose, &
-                       mpi_grp, need_partition, spacing, tp_enlarge)
+                       mpi_grp, need_partition, spacing, tp_enlarge, blocksize)
     type(cube_t),      intent(out) :: cube
     integer,           intent(in)  :: nn(3)
     type(simul_box_t), intent(in)  :: sb
@@ -103,10 +103,12 @@ contains
     logical, optional, intent(in)  :: verbose   !< Print info to the screen.
     type(mpi_grp_t), optional, intent(in) :: mpi_grp !< The mpi group to be use for cube parallelization
     logical, optional, intent(in)  :: need_partition !< Should we calculate and store the cube partition?
-    FLOAT, optional, intent(in)    :: spacing(3)        
-    FLOAT, optional, intent(in)    :: tp_enlarge(3)  !< Two point enlargement factor. Can be used with (p)nfft 
-                                                     !! enlarge the box by moving outward the cube first and last points  
+    FLOAT, optional, intent(in)    :: spacing(3)
+    FLOAT, optional, intent(in)    :: tp_enlarge(3)  !< Two point enlargement factor. Can be used with (p)nfft
+                                                     !! enlarge the box by moving outward the cube first and last points
                                                      !! in each direction. The resulting boundaries are rescaled by tp_enlarge.
+    integer, optional, intent(in)  :: blocksize !< just use a fixed block decomposition without caring about FFT library.
+                                                !! See description for cube_set_blocksize.
 
     integer :: mpi_comm, tmp_n(3), fft_type_, optimize_parity(3), default_lib, fft_library_
     integer :: effdim_fft
@@ -119,7 +121,7 @@ contains
     ASSERT(all(nn(1:3) > 0))
 
     fft_type_ = optional_default(fft_type, FFT_NONE)
-    tp_enlarge_(:) = (/M_ONE, M_ONE, M_ONE/)    
+    tp_enlarge_(:) = (/M_ONE, M_ONE, M_ONE/)
     if(present(tp_enlarge)) tp_enlarge_(:)=tp_enlarge(:)
 
     if (present(tp_enlarge)) then
@@ -138,9 +140,9 @@ contains
     nullify(cube%local)
     nullify(cube%np_local_fs)
     nullify(cube%xlocal_fs)
-    nullify(cube%local_fs) 
-    
-    
+    nullify(cube%local_fs)
+
+
     mpi_grp_ = mpi_world
     if (present(mpi_grp)) mpi_grp_ = mpi_grp
 
@@ -152,20 +154,22 @@ contains
         !%Variable FFTLibrary
         !%Type integer
         !%Section Mesh::FFTs
-        !%Default fftw 
+        !%Default fftw
         !%Description
         !% (experimental) You can select the FFT library to use.
         !%Option fftw 1
         !% Uses FFTW3 library.
         !%Option pfft 2
         !% (experimental) Uses PFFT library, which has to be linked.
-        !%Option clfft 3
-        !% (experimental) Uses clAmdFft (GPU) library, which has to be linked.
+        !%Option accel 3
+        !% (experimental) Uses a GPU accelerated library. This only
+        !% works if Octopus was compiled with Cuda or OpenCL support.
         !%End
         default_lib = FFTLIB_FFTW
-#ifdef HAVE_CLAMDFFT
+
+#ifdef HAVE_CLFFT
         ! disabled by default since there are some problems for dim != 3
-        ! if(opencl_is_enabled() .and. sb%dim == 3) default_lib = FFTLIB_CLAMD
+        ! if(accel_is_enabled() .and. sb%dim == 3) default_lib = FFTLIB_ACCEL
 #endif
         call parse_variable('FFTLibrary', default_lib, fft_library_)
         if(optional_default(verbose, .false.)) call messages_print_var_option(stdout, 'FFTLibrary', fft_library_)
@@ -177,14 +181,14 @@ contains
       end if
 #endif
 
-      if (fft_library_ == FFTLIB_CLAMD) then
-#ifndef HAVE_CLAMDFFT
-        call messages_write('You have selected the OpenCL FFT, but Octopus was compiled', new_line = .true.)
-        call messages_write('without clAmdFft (or OpenCL) support.')
+      if (fft_library_ == FFTLIB_ACCEL) then
+#if ! (defined(HAVE_CLFFT) || defined(HAVE_CUDA))
+        call messages_write('You have selected the Accelerated FFT, but Octopus was compiled', new_line = .true.)
+        call messages_write('without clfft (OpenCL) or Cuda support.')
         call messages_fatal()
 #endif
-        if(.not. opencl_is_enabled()) then
-          call messages_write('You have selected the OpenCL FFT, but OpenCL is disabled.')
+        if(.not. accel_is_enabled()) then
+          call messages_write('You have selected the accelerated FFT, but acceleration is disabled.')
           call messages_fatal()
         end if
       end if
@@ -193,8 +197,25 @@ contains
       fft_library_ = FFTLIB_NONE
     end if
 
+    ! Note: later we set parallel_in_domains if blocksize is given, too
     cube%parallel_in_domains = (fft_library_ == FFTLIB_PFFT .or. fft_library_ == FFTLIB_PNFFT)
-    if (fft_library_ == FFTLIB_NONE) then
+    if (present(blocksize)) then
+      ASSERT(present(need_partition).and.need_partition)
+      ASSERT(fft_library_ == FFTLIB_NONE)
+      ! For all the different FFT libraries there are strange (?)
+      ! rules about how the decomposition is chosen.  What we want
+      ! (for libvdwxc) is a cube parallelized according to the simple
+      ! but contrary rule "just do what I say".  Hence the blocksize
+      ! parameter.  (Later to be expanded to allow 2D distributions.)
+      cube%rs_n_global = nn
+      cube%fs_n_global = nn ! not to be used
+      cube%fs_n = cube%fs_n_global ! not to be used
+      cube%fs_istart = 1 ! not to be used
+
+      mpi_comm = mpi_grp_%comm
+      cube%parallel_in_domains = (mpi_grp_%size > 1) ! XXX whether comm size > 1
+      call cube_set_blocksize(cube%rs_n_global, blocksize, mpi_grp_%rank, cube%rs_n, cube%rs_istart)
+    else if (fft_library_ == FFTLIB_NONE) then
       cube%rs_n_global = nn
       cube%fs_n_global = nn
       cube%rs_n = cube%rs_n_global
@@ -223,22 +244,22 @@ contains
       if(present(nn_out)) nn_out(1:3) = tmp_n(1:3)
 
       call fft_get_dims(cube%fft, cube%rs_n_global, cube%fs_n_global, cube%rs_n, cube%fs_n, &
-           cube%rs_istart, cube%fs_istart)
+        cube%rs_istart, cube%fs_istart)
 
-      if(present(tp_enlarge) .or. present(spacing)) then 
+      if(present(tp_enlarge) .or. present(spacing)) then
         call cube_init_coords(cube, tp_enlarge_, spacing, fft_library_)
       end if
 
-      if(fft_library_ == FFTLIB_NFFT .or. fft_library_ == FFTLIB_PNFFT) then 
+      if(fft_library_ == FFTLIB_NFFT .or. fft_library_ == FFTLIB_PNFFT) then
         call fft_init_stage1(cube%fft, cube%Lrs, cube%rs_n_global)
-        !set local dimensions after stage1 - needed for PNFFT 
+        !set local dimensions after stage1 - needed for PNFFT
         call fft_get_dims(cube%fft, cube%rs_n_global, cube%fs_n_global, cube%rs_n, cube%fs_n, &
              cube%rs_istart, cube%fs_istart)
       end if
 
     end if
 
-    if(present(spacing) .and. .not. associated(cube%Lrs)) then 
+    if(present(spacing) .and. .not. associated(cube%Lrs)) then
       call cube_init_coords(cube, tp_enlarge_, spacing, fft_library_)
     end if
 
@@ -407,7 +428,7 @@ contains
   ! ---------------------------------------------------------
   !> Returns the FFT library of the cube.
   !! Possible values are FFTLIB_NONE, FFTLIB_FFTW, FFTLIB_PFFT 
-  !! FFTLIB_CLAMD, FFTLIB_NFFT and FFTLIB_PNFFT 
+  !! FFTLIB_ACCEL, FFTLIB_NFFT and FFTLIB_PNFFT 
   !! (defined in fft.F90)
   integer function cube_getFFTLibrary(cube) result(fft_library)
     type(cube_t), intent(in)  :: cube
@@ -580,6 +601,27 @@ contains
 
   end function cube_point_to_process
 
+  ! Sets a 1D decomposition with fixed-size blocks over the last (least-contiguous) axis.
+  ! Each core will have <blocksize> slices except the last one which will typically have
+  ! less.  (In some cases, there can be multiple trailing cores without any slices.)
+  subroutine cube_set_blocksize(rs_n_global, blocksize, rank, rs_n, rs_istart)
+    integer,  intent(in) :: rs_n_global(1:3)
+    integer,  intent(in) :: blocksize
+    integer,  intent(in) :: rank
+    integer, intent(out) :: rs_n(1:3)
+    integer, intent(out) :: rs_istart(1:3)
+
+    integer :: imin, imax
+
+    rs_n = rs_n_global
+    rs_istart = 1
+
+    imin = min(blocksize * rank, rs_n_global(3))
+    imax = min(imin + blocksize, rs_n_global(3))
+    rs_istart(3) = 1 + imin
+    rs_n(3) = imax - imin
+  end subroutine cube_set_blocksize
+
   ! ---------------------------------------------------------
   subroutine cube_partition(cube, part)
     type(cube_t),       intent(in)  :: cube
@@ -678,7 +720,7 @@ contains
     POP_SUB(cube_partition_messages_debug)
   end subroutine cube_partition_messages_debug
 
-end module cube_m
+end module cube_oct_m
 
 
 !! Local Variables:

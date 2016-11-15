@@ -17,9 +17,9 @@
 ## Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 ## 02110-1301, USA.
 ##
-## $Id: Makefile.am 12743 2015-01-28 13:35:02Z joseba $
+## $Id: Makefile.am 15615 2016-09-21 16:25:48Z dstrubbe $
 
-SUBDIRS = en es it eu
+SUBDIRS = da de en es eu it
 
 tm2dir = $(pkgdatadir)/recipes
 

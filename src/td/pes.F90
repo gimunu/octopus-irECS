@@ -15,27 +15,27 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: pes.F90 14976 2016-01-05 14:27:54Z xavier $
+!! $Id: pes.F90 15582 2016-08-14 10:27:12Z philipp $
 
 #include "global.h"
 
-module pes_m
-  use geometry_m
-  use global_m
-  use grid_m
-  use hamiltonian_m
-  use mesh_m
-  use messages_m
-  use mpi_m
-  use output_m
-  use parser_m
-  use pes_mask_m
-  use pes_spm_m
-  use pes_flux_m
-  use restart_m
-  use simul_box_m
-  use states_m
-  use varinfo_m
+module pes_oct_m
+  use geometry_oct_m
+  use global_oct_m
+  use grid_oct_m
+  use hamiltonian_oct_m
+  use mesh_oct_m
+  use messages_oct_m
+  use mpi_oct_m
+  use output_oct_m
+  use parser_oct_m
+  use pes_mask_oct_m
+  use pes_spm_oct_m
+  use pes_flux_oct_m
+  use restart_oct_m
+  use simul_box_oct_m
+  use states_oct_m
+  use varinfo_oct_m
     
   implicit none
 
@@ -60,8 +60,6 @@ module pes_m
 
     logical :: calc_flux
     type(pes_flux_t) :: flux
-      
-    logical :: skip_restart 
     
   end type pes_t
 
@@ -175,27 +173,14 @@ contains
 
     
     if(pes%calc_spm)  call pes_spm_init(pes%spm, mesh, st, save_iter)
-    if(pes%calc_mask) call pes_mask_init(pes%mask, mesh, sb, st,hm,max_iter,dt)
-    if(pes%calc_flux) call pes_flux_init(pes%flux, mesh, st, hm)
+    if(pes%calc_mask) call pes_mask_init(pes%mask, mesh, sb, st, hm, max_iter,dt)
+    if(pes%calc_flux) call pes_flux_init(pes%flux, mesh, st, hm, save_iter, max_iter)
 
 
     !Footer Photoelectron info
     if(pes%calc_spm .or. pes%calc_mask .or. pes%calc_flux) then 
       call messages_print_stress(stdout)
     end if 
-
-
-    !%Variable PhotoElectronSkipRestart
-    !%Type logical
-    !%Default false
-    !%Section Time-Dependent::PhotoElectronSpectrum
-    !%Description
-    !%This variable controls the method used for the calculation of
-    !%the photoelectron spectrum. You can specify more than one value
-    !%by giving them as a sum, for example:
-    !%End
-
-    call parse_variable('PhotoElectronSkipRestart', .false., pes%skip_restart)
 
     POP_SUB(pes_init)
   end subroutine pes_init
@@ -216,21 +201,20 @@ contains
 
 
   ! ---------------------------------------------------------
-  subroutine pes_calc(pes, mesh, st, dt, iter, maxiter, gr, hm)
+  subroutine pes_calc(pes, mesh, st, dt, iter, gr, hm)
     type(pes_t),         intent(inout) :: pes
     type(mesh_t),        intent(in)    :: mesh
     type(states_t),      intent(inout) :: st
     type(grid_t),        intent(in)    :: gr
     FLOAT,               intent(in)    :: dt
     integer,             intent(in)    :: iter
-    integer,             intent(in)    :: maxiter
     type(hamiltonian_t), intent(in)    :: hm
 
     PUSH_SUB(pes_calc)
 
-    if(pes%calc_spm)   call pes_spm_calc  (pes%spm, st, mesh, dt, iter, hm)
+    if(pes%calc_spm)  call pes_spm_calc(pes%spm, st, mesh, dt, iter, hm)
     if(pes%calc_mask) call pes_mask_calc(pes%mask, mesh, st, dt, iter)
-    if(pes%calc_flux) call pes_flux_save(pes%flux, mesh, st, gr, hm, iter, maxiter, dt)
+    if(pes%calc_flux) call pes_flux_calc(pes%flux, mesh, st, gr, hm, iter, dt)
 
     POP_SUB(pes_calc)
   end subroutine pes_calc
@@ -249,9 +233,7 @@ contains
 
     PUSH_SUB(pes_output)
     
-    if(mpi_grp_is_root(mpi_world)) then
-      if(pes%calc_spm) call pes_spm_output(pes%spm, mesh, st, iter, dt)
-    end if
+    if(pes%calc_spm) call pes_spm_output(pes%spm, mesh, st, iter, dt)
 
     if(pes%calc_mask) call pes_mask_output (pes%mask, mesh, st,outp, "td.general/PESM", gr, geo,iter)
 
@@ -321,14 +303,6 @@ contains
       POP_SUB(pes_load)
       return
     end if
-    
-    if (pes%skip_restart) then
-      message(1) = "Info: Skipped reading PES restart info."
-      call messages_info(1)      
-      POP_SUB(pes_load)
-      return
-    end if
-    
 
     if (debug%info) then
       message(1) = "Debug: Reading PES restart."
@@ -376,7 +350,7 @@ contains
 
 
 
-end module pes_m
+end module pes_oct_m
 
 
 !! Local Variables:

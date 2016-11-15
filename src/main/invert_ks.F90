@@ -15,26 +15,26 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: invert_ks.F90 14221 2015-06-05 16:37:56Z xavier $
+!! $Id: invert_ks.F90 15620 2016-09-26 07:34:51Z mjv500 $
 
 #include "global.h"
 
-module invert_ks_m
-  use density_m
-  use eigensolver_m 
-  use global_m
-  use hamiltonian_m 
-  use output_m 
-  use io_m 
-  use mesh_function_m 
-  use messages_m 
-  use parser_m 
-  use poisson_m
-  use profiling_m 
-  use restart_m
-  use states_restart_m
-  use system_m 
-  use xc_ks_inversion_m 
+module invert_ks_oct_m
+  use density_oct_m
+  use eigensolver_oct_m 
+  use global_oct_m
+  use hamiltonian_oct_m 
+  use output_oct_m 
+  use io_oct_m 
+  use mesh_function_oct_m 
+  use messages_oct_m 
+  use parser_oct_m 
+  use poisson_oct_m
+  use profiling_oct_m 
+  use restart_oct_m
+  use states_restart_oct_m
+  use system_oct_m 
+  use xc_ks_inversion_oct_m 
   
   implicit none
 
@@ -87,7 +87,7 @@ contains
     call dpoisson_solve(sys%ks%hartree_solver, hm%vhartree, rho)
 
     do ii = 1, nspin
-      hm%vhxc(:,ii) = hm%vhartree(:)
+      hm%vhxc(1:np, ii) = hm%vhartree(1:np)
     end do
 
     call hamiltonian_update(hm, sys%gr%mesh)
@@ -104,9 +104,11 @@ contains
              sys%ks%ks_inversion%aux_st, sys%ks%ks_inversion%eigensolver, sys%ks%ks_inversion%asymp)
      
     else ! iterative case
-      if (sys%ks%ks_inversion%method == XC_INV_METHOD_VS_ITER) then ! iterative procedure for v_s 
+      if (sys%ks%ks_inversion%method >= XC_INV_METHOD_VS_ITER .and. &
+          sys%ks%ks_inversion%method <= XC_INV_METHOD_ITER_GODBY) then ! iterative procedure for v_s 
         call invertks_iter(target_rho, nspin, hm, sys%gr, &
-             sys%ks%ks_inversion%aux_st, sys%ks%ks_inversion%eigensolver, sys%ks%ks_inversion%asymp)
+             sys%ks%ks_inversion%aux_st, sys%ks%ks_inversion%eigensolver, sys%ks%ks_inversion%asymp,&
+             sys%ks%ks_inversion%method)
       end if
     end if
 
@@ -223,7 +225,7 @@ contains
   end subroutine invert_ks_run
 
   
-end module invert_ks_m
+end module invert_ks_oct_m
 
 !! Local Variables:
 !! mode: f90

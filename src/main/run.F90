@@ -15,42 +15,42 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: run.F90 14956 2016-01-03 16:06:40Z xavier $
+!! $Id: run.F90 15203 2016-03-19 13:15:05Z xavier $
 
 #include "global.h"
 
-module run_m
-  use base_hamiltonian_m
-  use base_handle_m
-  use base_model_m
-  use casida_m
-  use em_resp_m
-  use fft_m
-  use geom_opt_m
-  use global_m
-  use ground_state_m
-  use hamiltonian_m
-  use invert_ks_m
-  use parser_m
-  use messages_m
-  use mpi_debug_m
-  use memory_m
-  use multicomm_m
-  use opt_control_m
-  use phonons_fd_m
-  use phonons_lr_m
-  use poisson_m
-  use kdotp_m
-  use profiling_m
-  use pulpo_m
-  use restart_m
-  use static_pol_m
-  use system_m
-  use td_m
-  use unit_system_m
-  use unocc_m
-  use varinfo_m
-  use vdw_m
+module run_oct_m
+  use base_hamiltonian_oct_m
+  use base_handle_oct_m
+  use base_model_oct_m
+  use casida_oct_m
+  use em_resp_oct_m
+  use fft_oct_m
+  use geom_opt_oct_m
+  use global_oct_m
+  use ground_state_oct_m
+  use hamiltonian_oct_m
+  use invert_ks_oct_m
+  use parser_oct_m
+  use messages_oct_m
+  use mpi_debug_oct_m
+  use memory_oct_m
+  use multicomm_oct_m
+  use opt_control_oct_m
+  use phonons_fd_oct_m
+  use phonons_lr_oct_m
+  use poisson_oct_m
+  use kdotp_oct_m
+  use profiling_oct_m
+  use pulpo_oct_m
+  use restart_oct_m
+  use static_pol_oct_m
+  use system_oct_m
+  use td_oct_m
+  use unit_system_oct_m
+  use unocc_oct_m
+  use varinfo_oct_m
+  use vdw_oct_m
 
   implicit none
 
@@ -163,20 +163,17 @@ contains
       ! At present, PCM calculations in parallel must have ParallelizationStrategy = par_states
       if (hm%pcm%run_pcm) then 
         if ( (sys%mc%par_strategy /= P_STRATEGY_SERIAL).and.(sys%mc%par_strategy /= P_STRATEGY_STATES) ) then
-          message(1) = "Parallel calculations with PCM are only possible with ParallelizationStrategy=par_states"
-          call messages_fatal(1)
-        endif
-      endif
+          call messages_experimental('Parallel in domain calculations with PCM')
+        end if
+      end if
     else
       call hamiltonian_init(hm, sys%gr, sys%geo, sys%st, sys%ks%theory_level, sys%ks%xc_family)
 
-      ! At present, PCM calculations in parallel must have ParallelizationStrategy = par_states
       if (hm%pcm%run_pcm) then 
         if ( (sys%mc%par_strategy /= P_STRATEGY_SERIAL).and.(sys%mc%par_strategy /= P_STRATEGY_STATES) ) then
-          message(1) = "Parallel calculations with PCM are only possible with ParallelizationStrategy=par_states"
-          call messages_fatal(1)
-        endif
-      endif
+          call messages_experimental('Parallel in domain calculations with PCM')
+        end if
+      end if
     end if
 
     call messages_print_stress(stdout, 'Approximate memory requirements')
@@ -314,7 +311,7 @@ contains
   end subroutine subsystems_get
 
 
-end module run_m
+end module run_oct_m
 
 !! Local Variables:
 !! mode: f90

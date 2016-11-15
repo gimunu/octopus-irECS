@@ -15,39 +15,39 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: geom_opt.F90 14662 2015-10-09 16:28:49Z xavier $
+!! $Id: geom_opt.F90 15216 2016-03-21 15:48:22Z acastro $
 
 #include "global.h"
 
-module geom_opt_m
-  use density_m
-  use energy_calc_m
-  use geometry_m
-  use global_m
-  use hamiltonian_m
-  use io_m
-  use io_function_m
-  use lcao_m
-  use loct_m
-  use parser_m
-  use mesh_m
-  use messages_m
-  use minimizer_m
-  use mpi_m 
-  use output_m
-  use profiling_m
-  use restart_m
-  use scf_m
-  use simul_box_m
-  use species_m
-  use states_m
-  use states_restart_m
-  use system_m
-  use unit_m
-  use unit_system_m
-  use v_ks_m
-  use varinfo_m
-  use xyz_adjust_m
+module geom_opt_oct_m
+  use density_oct_m
+  use energy_calc_oct_m
+  use geometry_oct_m
+  use global_oct_m
+  use hamiltonian_oct_m
+  use io_oct_m
+  use io_function_oct_m
+  use lcao_oct_m
+  use loct_oct_m
+  use parser_oct_m
+  use mesh_oct_m
+  use messages_oct_m
+  use minimizer_oct_m
+  use mpi_oct_m 
+  use output_oct_m
+  use profiling_oct_m
+  use restart_oct_m
+  use scf_oct_m
+  use simul_box_oct_m
+  use species_oct_m
+  use states_oct_m
+  use states_restart_oct_m
+  use system_oct_m
+  use unit_oct_m
+  use unit_system_oct_m
+  use v_ks_oct_m
+  use varinfo_oct_m
+  use xyz_adjust_oct_m
 
   implicit none
 
@@ -276,8 +276,8 @@ contains
       !% forces) which makes it less efficient than other schemes. It is included here
       !% for completeness, since it is free.
       !%Option fire 8
-      !% (Experimental) The FIRE algorithm.
-      !% Ref: E. Bitzek, P. Koskinen, F. Gahler, M. Moseler, and P. Gumbsch <i>Phys. Rev. Lett.</i> <b>97</b>, 170201 (2006).
+      !% (Experimental) The FIRE algorithm. See also <tt>GOFireMass</tt>.
+      !% Ref: E. Bitzek, P. Koskinen, F. Gahler, M. Moseler, and P. Gumbsch, <i>Phys. Rev. Lett.</i> <b>97</b>, 170201 (2006).
       !%End
       call parse_variable('GOMethod', MINMETHOD_STEEPEST_DESCENT, g_opt%method)
       if(.not.varinfo_valid_option('GOMethod', g_opt%method)) call messages_input_error('GOMethod')
@@ -365,12 +365,13 @@ contains
       !%Default 0.0 amu
       !%Section Calculation Modes::Geometry Optimization
       !%Description
-      !% Fire algorithm assumes that all degrees of freedom
+      !% The Fire algorithm (<tt>GOMethod = fire</tt>) assumes that all degrees of freedom
       !% are comparable. All the velocities should be on the same
       !% scale,  which  for  heteronuclear  systems  can  be  roughly
-      !% achieved by setting all the atom masses equala. 
-      !% If GOFireMass is smaller or equal to 0., the masses of each 
-      !% species will be used. 
+      !% achieved by setting all the atom masses equal, to the value
+      !% specified by this variable.
+      !% If <tt>GOFireMass</tt> <= 0, the masses of each 
+      !% species will be used.
       !%End
       call parse_variable('GOFireMass', M_ZERO, g_opt%fire_mass, unit_amu)
 
@@ -497,6 +498,7 @@ contains
   !> Same as calc_point, but without the gradients.
   !! No intents here is unfortunately required because the same dummy function will be passed
   !! also to newuoa routines in opt_control, and there the interface has no intents.
+  !! UPDATE: Because the newuoa routine have disappeared, probably this can be changed.
   subroutine calc_point_ng(size, coords, objective)
     integer     :: size         !< intent(in)
     REAL_DOUBLE :: coords(size) !< intent(in)
@@ -682,7 +684,7 @@ contains
     POP_SUB(write_iter_info_ng)
   end subroutine write_iter_info_ng
 
-end module geom_opt_m
+end module geom_opt_oct_m
 
 !! Local Variables:
 !! mode: f90

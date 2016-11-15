@@ -22,11 +22,11 @@ Spacing = 0.7
 #############################
 # Boundaries
 #############################
-AbsorbingBoundaries = sin2
+AbsorbingBoundaries = cap
 %ABShape
  15 | Radius
 %
-ABHeight = -1.0
+ABCapHeight = -1.0
 
 #############################
 # PES
@@ -38,13 +38,13 @@ PES_Flux_DeltaK = 0.01
 PES_Flux_StepsThetaK = 30
 PES_Flux_StepsPhiK = 30
 PES_Flux_Radius = 15
-PES_Flux_Lmax = 2
+PES_Flux_Lmax = 4
 
 ##########################
 #LASER
 ##########################
 
-amplitude = .7763
+amplitude = 1.1763
 omega = 1.194838
 
 tc = 2*pi/omega
@@ -53,7 +53,7 @@ nu = 2
 ntot = nc + 2*nu
 
 %TDExternalFields
-  vector_potential | 1 | 0 | 0 | omega | "ramp"
+  vector_potential | 0 | 0 | 1 | omega | "ramp"
 %
 
 %TDFunctions
@@ -71,8 +71,3 @@ TDExpOrder = 20
 
 TDPropagationTime = ntot*tc
 
-#############################
-# Output
-#############################
-OutputInterval = 1000
-RestartWrite = no

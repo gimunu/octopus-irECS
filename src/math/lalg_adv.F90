@@ -15,20 +15,20 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: lalg_adv.F90 14357 2015-06-23 23:26:35Z dstrubbe $
+!! $Id: lalg_adv.F90 15725 2016-11-10 15:26:26Z mjv500 $
 
 #include "global.h"
 
-module lalg_adv_m
-  use global_m
-  use lapack_m
-  use messages_m
-  use mpi_m
-  use profiling_m
-  use blacs_proc_grid_m
-  use scalapack_m
-  use sort_om
-  use utils_m
+module lalg_adv_oct_m
+  use global_oct_m
+  use lapack_oct_m
+  use messages_oct_m
+  use mpi_oct_m
+  use profiling_oct_m
+  use blacs_proc_grid_oct_m
+  use scalapack_oct_m
+  use sort_oct_m
+  use utils_oct_m
   
   implicit none
 
@@ -54,7 +54,8 @@ module lalg_adv_m
     lalg_check_zeigenderivatives, &
     lalg_zdni,                    &
     lalg_zduialpha,               &
-    lalg_zd2ni
+    lalg_zd2ni,                   &
+    lalg_least_squares
 
   type(profile_t), save :: cholesky_prof, eigensolver_prof
 
@@ -93,11 +94,11 @@ module lalg_adv_m
   end interface lalg_linsyssolve
 
   interface lalg_singular_value_decomp
-    module procedure zsingular_value_decomp
+    module procedure dsingular_value_decomp, zsingular_value_decomp
   end interface lalg_singular_value_decomp
 
   interface lalg_svd_inverse
-    module procedure zsvd_inverse
+    module procedure dsvd_inverse, zsvd_inverse
   end interface lalg_svd_inverse
 
   interface lalg_invert_upper_triangular
@@ -115,6 +116,10 @@ module lalg_adv_m
   interface lapack_geev
     module procedure lalg_dgeev, lalg_zgeev
   end interface lapack_geev
+
+  interface lalg_least_squares
+    module procedure dlalg_least_squares_vec, zlalg_least_squares_vec
+  end interface lalg_least_squares
 
 contains
 
@@ -408,7 +413,7 @@ contains
     SAFE_ALLOCATE(sg_values(1:n))
 
     imat = mat
-    call  lalg_singular_value_decomp(n, imat, u, vt, sg_values)
+    call  lalg_singular_value_decomp(n, n, imat, u, vt, sg_values)
 
     sigma = M_z0
     do i = 1, n
@@ -595,7 +600,7 @@ contains
 #include "real.F90"
 #include "lalg_adv_lapack_inc.F90"
 
-end module lalg_adv_m
+end module lalg_adv_oct_m
 
 !! Local Variables:
 !! mode: f90

@@ -17,7 +17,7 @@
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 # 02110-1301, USA.
 #
-# $Id: mk_varinfo.pl 14494 2015-08-01 19:36:45Z xavier $
+# $Id: mk_varinfo.pl 15060 2016-01-14 17:25:50Z xavier $
 
 
 use Getopt::Std;
@@ -78,6 +78,8 @@ open(OUT_orig, ">$share/varinfo_orig");
 
 %opt_value = ();
 %varopt = ();
+%default_value = ();
+
 foreach $F90file (@F90){
   open(IN, "<$F90file");
   while($_=<IN>){
@@ -88,6 +90,10 @@ foreach $F90file (@F90){
       do {
 	s/^\s*!%//; s/\s*$//;
 
+	if(/^Default\s+(\S+)/){
+	  put_default($1, $var);
+	}
+	    
 	if(/^Option\s+(\S+)\s+bit\((\S+)\)/){
 	  if($2 > 30) {
 	    printf STDERR "ERROR: bit($2) is too large and will overflow the maximum integer.\n";
@@ -137,7 +143,8 @@ close(OUT_text);
 close(OUT_orig);
 
 print_opt();
-print_header();
+print_options_header();
+print_defaults_header();
 
 #####################################################
 # tries to put an option in global %opt_value
@@ -156,6 +163,15 @@ sub put_opt{
 }
 
 #####################################################
+# tries to put an option in global %opt_value
+sub put_default{
+  my ($a, $var) = @_;
+
+  $default_value{$var} = $a;
+ 
+}
+
+#####################################################
 # prints %opt_value to share/variables
 sub print_opt{
   open(OUT, ">$share/variables");
@@ -168,8 +184,19 @@ sub print_opt{
 }
 
 #####################################################
+# prints %default_value to src/include/defaults.h
+sub print_defaults_header{
+  open(OUT, ">$include/defaults.h");
+  my $key;
+  foreach $key (sort(keys %default_value)) {
+    print OUT "#define DEFAULT__", uc $key, " (", $default_value{"$key"}, ")\n";
+  }
+  close(OUT);
+}
+
+#####################################################
 # prints %opt_value to src/include/options.h
-sub print_header{
+sub print_options_header{
   open(OUT, ">$include/options.h");
   my $key;
   foreach $key (sort(keys %varopt)) {

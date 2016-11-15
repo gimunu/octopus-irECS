@@ -15,26 +15,26 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: dielectric_function.F90 13863 2015-04-22 12:20:37Z micael $
+!! $Id: dielectric_function.F90 15651 2016-10-14 11:59:44Z huebener $
 
 #include "global.h"
 
 program dielectric_function
-  use batch_m
-  use command_line_m
-  use geometry_m
-  use global_m
-  use io_m
-  use lalg_adv_m
-  use loct_m
-  use messages_m
-  use parser_m
-  use profiling_m
-  use space_m
-  use spectrum_m
-  use simul_box_m
-  use unit_m
-  use unit_system_m
+  use batch_oct_m
+  use command_line_oct_m
+  use geometry_oct_m
+  use global_oct_m
+  use io_oct_m
+  use lalg_adv_oct_m
+  use loct_oct_m
+  use messages_oct_m
+  use parser_oct_m
+  use profiling_oct_m
+  use space_oct_m
+  use spectrum_oct_m
+  use simul_box_oct_m
+  use unit_oct_m
+  use unit_system_oct_m
 
   implicit none
 
@@ -142,12 +142,14 @@ program dielectric_function
     call batch_add_state(ftimagb, ftimag(0:,  ii))
   end do
 
-  call spectrum_signal_damp(spectrum%damp, spectrum%damp_factor, istart, iend, M_ZERO, dt, vecpotb)
+  call spectrum_signal_damp(spectrum%damp, spectrum%damp_factor, istart, iend, spectrum%start_time, dt, vecpotb)
 
   call spectrum_fourier_transform(spectrum%method, SPECTRUM_TRANSFORM_COS, spectrum%noise, &
-    istart, iend, M_ZERO, dt, vecpotb, 1, energy_steps + 1, spectrum%energy_step, ftrealb)
+    istart, iend, spectrum%start_time, dt, vecpotb, 1, energy_steps + 1, spectrum%energy_step, ftrealb)
+
   call spectrum_fourier_transform(spectrum%method, SPECTRUM_TRANSFORM_SIN, spectrum%noise, &
-    istart, iend, M_ZERO, dt, vecpotb, 1, energy_steps + 1, spectrum%energy_step, ftimagb)
+    istart, iend, spectrum%start_time, dt, vecpotb, 1, energy_steps + 1, spectrum%energy_step, ftimagb)
+
 
   call batch_end(vecpotb)
   call batch_end(ftrealb)

@@ -15,7 +15,7 @@
 ## Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 ## 02110-1301, USA.
 ##
-## $Id: metis.m4 14713 2015-10-30 01:58:23Z dstrubbe $
+## $Id: metis.m4 15053 2016-01-13 17:29:15Z dstrubbe $
 ##
 
 AC_DEFUN([ACX_PATH_METIS], [
@@ -73,7 +73,7 @@ else
 
     AC_LINK_IFELSE([AC_LANG_PROGRAM([
 #include <metis.h>
-#ifdef METIS_USE_DOUBLEPRECISION
+#if defined(METIS_USE_DOUBLEPRECISION) || REALTYPEWIDTH == 64
   #error METIS must be compiled in single precision for Octopus.
 #endif
 ],[

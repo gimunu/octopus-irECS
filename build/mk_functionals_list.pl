@@ -17,7 +17,7 @@
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 # 02110-1301, USA.
 #
-# $Id: mk_functionals_list.pl 14809 2015-11-21 15:26:00Z askhl $
+# $Id: mk_functionals_list.pl 15441 2016-06-28 21:02:27Z dstrubbe $
 
 
 use Getopt::Std;
@@ -65,7 +65,7 @@ print OUT <<"EndOfHeader";
 !% correlation functional, or a single exchange-correlation functional
 !% (<i>e.g.</i> <tt>hyb_gga_xc_pbeh</tt>). For more information on the functionals, see
 !% <a href=http://www.tddft.org/programs/octopus/wiki/index.php/Libxc:manual#Available_functionals>
-!% Libxc documentation</a>. The list provided here is from libxc 2.0; if you have
+!% Libxc documentation</a>. The list provided here is from libxc 2.2.3; if you have
 !% linked against a different libxc version, you may have a somewhat different set
 !% of available functionals. Note that kinetic-energy functionals are not supported.
 !% <br>Defaults:
@@ -113,7 +113,7 @@ print OUT <<EOF;
 !%Option vdw_c_vdwdf2     919000
 !% van der Waals density functional vdW-DF2 correlation from libvdwxc (not from libxc).  Use with gga_x_rpw86.
 !%Option vdw_c_vdwdfcx    920000
-!% van der Waals density functional vdW-DF-CX correlation from libvdwxc (not from libxc).  Still lacks GGA exchange.
+!% van der Waals density functional vdW-DF-CX correlation from libvdwxc (not from libxc).  Use with gga_x_lv_rpw86.
 !%Option none                       0
 !% Exchange and correlation set to zero (not from libxc).
 !%End

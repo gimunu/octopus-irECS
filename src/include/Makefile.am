@@ -17,7 +17,7 @@
 ## Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 ## 02110-1301, USA.
 ##
-## $Id: Makefile.am 13777 2015-04-08 07:00:48Z dstrubbe $
+## $Id: Makefile.am 15058 2016-01-14 16:50:31Z xavier $
 
 noinst_HEADERS =                  \
 	global.h                  \
@@ -33,17 +33,19 @@ noinst_HEADERS =                  \
 
 include $(srcdir)/../common-rules.make
 
-global.h: config_F90.h options.h
+global.h: config_F90.h options.h defaults.h
 
 config_F90.h: $(top_builddir)/config.h
 	grep '^#define' $^ > config_F90.h
 
 options.h: RUN_SCRIPT
 
+defaults.h: RUN_SCRIPT
+
 RUN_SCRIPT:
 	$(top_srcdir)/build/mk_varinfo.pl -s $(top_srcdir) -b $(top_builddir)
 
 clean-local:
-	rm -f config_F90.h options.h
+	rm -f config_F90.h options.h defaults.h
 
 .PHONY: RUN_SCRIPT

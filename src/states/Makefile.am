@@ -17,7 +17,7 @@
 ## Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 ## 02110-1301, USA.
 ##
-## $Id: Makefile.am 14791 2015-11-19 05:04:26Z xavier $
+## $Id: Makefile.am 15357 2016-05-11 16:53:13Z huebener $
 
 noinst_LIBRARIES = libstates.a
 
@@ -68,14 +68,14 @@ physics_op.o : physics_op.F90 physics_op_inc.F90
 states_parallel.o : states_parallel.F90 states_parallel_inc.F90 states.o
 states.o : states.F90 states_group.o states_inc.F90 states_dim.o restart.o modelmb_particles.o smear.o cmplxscl.o
 states_dim.o : states_dim.F90
-states_group.o : states_group.F90
+states_group.o : states_group.F90 states_dim.o
 states_calc.o : states_calc.F90 states_calc_inc.F90 states.o states_block.o smear.o cmplxscl.o physics_op.o states_dim.o states_parallel.o
 states_block.o : states_block.F90 states_block_inc.F90 states.o
 states_restart.o : states_restart.F90 linear_response.o restart.o smear.o states.o states_calc.o states_dim.o states_io.o
 excited_states.o : excited_states.F90 excited_states_inc.F90 states.o states_calc.o states_dim.o
 linear_response.o : linear_response.F90 linear_response_inc.F90 states.o states_calc.o states_dim.o smear.o restart.o
 restart.o : restart.F90 restart_inc.F90
-density.o : density.F90 states.o smear.o states_dim.o
+density.o : density.F90 density_inc.F90 states.o smear.o states_dim.o
 states_io.o : states_io.F90 states.o smear.o states_dim.o
 cmplxscl.o : cmplxscl.F90
 smear.o : smear.F90 cmplxscl.o

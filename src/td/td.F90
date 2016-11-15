@@ -15,49 +15,50 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: td.F90 14976 2016-01-05 14:27:54Z xavier $
+!! $Id: td.F90 15695 2016-10-26 16:16:17Z nicolastd $
 
 #include "global.h"
 
-module td_m
-  use calc_mode_par_m
-  use density_m
-  use energy_calc_m
-  use forces_m
-  use gauge_field_m
-  use geometry_m
-  use grid_m
-  use ground_state_m
-  use hamiltonian_m
-  use io_m
-  use ion_dynamics_m
-  use kick_m
-  use lasers_m
-  use loct_m
-  use loct_math_m
-  use modelmb_exchange_syms_m
-  use mpi_m
-  use parser_m
-  use pes_m
-  use poisson_m
-  use potential_interpolation_m
-  use profiling_m
-  use restart_m
-  use scdm_m
-  use scf_m
-  use simul_box_m
-  use states_m
-  use states_calc_m
-  use states_restart_m
-  use system_m
-  use propagator_m
-  use propagator_base_m
-  use td_write_m
-  use types_m
-  use unit_m
-  use unit_system_m
-  use v_ks_m
-  use varinfo_m
+module td_oct_m
+  use boundary_op_oct_m
+  use calc_mode_par_oct_m
+  use density_oct_m
+  use energy_calc_oct_m
+  use forces_oct_m
+  use gauge_field_oct_m
+  use geometry_oct_m
+  use grid_oct_m
+  use ground_state_oct_m
+  use hamiltonian_oct_m
+  use io_oct_m
+  use ion_dynamics_oct_m
+  use kick_oct_m
+  use lasers_oct_m
+  use loct_oct_m
+  use loct_math_oct_m
+  use modelmb_exchange_syms_oct_m
+  use mpi_oct_m
+  use parser_oct_m
+  use pes_oct_m
+  use poisson_oct_m
+  use potential_interpolation_oct_m
+  use profiling_oct_m
+  use restart_oct_m
+  use scdm_oct_m
+  use scf_oct_m
+  use simul_box_oct_m
+  use states_oct_m
+  use states_calc_oct_m
+  use states_restart_oct_m
+  use system_oct_m
+  use propagator_oct_m
+  use propagator_base_oct_m
+  use td_write_oct_m
+  use types_oct_m
+  use unit_oct_m
+  use unit_system_oct_m
+  use v_ks_oct_m
+  use varinfo_oct_m
 
   implicit none
 
@@ -85,7 +86,6 @@ module td_m
     logical              :: recalculate_gs !< Recalculate ground-state along the evolution.
 
     type(pes_t)          :: pesv
-    type(gauge_force_t)  :: gauge_force
 
     FLOAT                :: mu
     integer              :: dynamics
@@ -167,17 +167,14 @@ contains
     !% evolution becoming unstable.
     !%
     !% The default value is the maximum value that we have found
-    !% empirically that is stable for the spacing Octopus is
-    !% using. However, you might need to adjust this value.
+    !% empirically that is stable for the spacing <math>h</math>:
+    !% <math>dt = 0.0426 - 0.207 h + 0.808 h^2</math>
+    !% (from parabolic fit to Fig. 4 of http://dx.doi.org/10.1021/ct800518j,
+    !% probably valid for 3D systems only).
+    !% However, you might need to adjust this value.
     !%End
 
     spacing = minval(sys%gr%mesh%spacing(1:sys%gr%sb%dim))
-    ! These constants come from adjusting a parabola to values of
-    ! maximum dt for different spacings (Fig. 4 of
-    ! http://dx.doi.org/10.1021/ct800518j ).
-    !
-    ! This is probably valid for 3D systems only.
-    !
     default_dt = CNST(0.0426) - CNST(0.207)*spacing + CNST(0.808)*spacing**2
     default_dt = default_dt*td%mu
 
@@ -406,7 +403,7 @@ contains
 
     if(td%iter == 0) call td_run_zero_iter()
 
-    if (gauge_field_is_applied(hm%ep%gfield)) call gauge_field_get_force(hm%ep%gfield, gr, st, td%gauge_force)
+    if (gauge_field_is_applied(hm%ep%gfield)) call gauge_field_get_force(hm%ep%gfield, gr, st)
 
     !call td_check_trotter(td, sys, h)
     td%iter = td%iter + 1
@@ -447,9 +444,6 @@ contains
         end if
       end if
 
-      !Apply mask absorbing boundaries
-      if(hm%ab == MASK_ABSORBING) call zvmask(gr, hm, st) 
-
       ! in case use scdm localized states for exact exchange and request a new localization             
       if(hm%scdm_EXX) scdm_is_local = .false.
 
@@ -457,17 +451,20 @@ contains
       select case(td%dynamics)
       case(EHRENFEST)
         call propagator_dt(sys%ks, hm, gr, st, td%tr, iter*td%dt, td%dt, td%energy_update_iter*td%mu, iter, td%ions, geo, &
-          gauge_force = td%gauge_force, scsteps = scsteps, &
+          scsteps = scsteps, &
           update_energy = (mod(iter, td%energy_update_iter) == 0) .or. (iter == td%max_iter) )
       case(BO)
-        call propagator_dt_bo(td%scf, gr, sys%ks, st, hm, td%gauge_force, geo, sys%mc, sys%outp, iter, td%dt, td%ions, scsteps)
+        call propagator_dt_bo(td%scf, gr, sys%ks, st, hm, geo, sys%mc, sys%outp, iter, td%dt, td%ions, scsteps)
       end select
+
+      !Apply mask absorbing boundaries
+      if(hm%bc%abtype == MASK_ABSORBING) call zvmask(gr, hm, st) 
 
       !Photoelectron stuff 
       if(td%pesv%calc_spm .or. td%pesv%calc_mask .or. td%pesv%calc_flux) &
-        call pes_calc(td%pesv, gr%mesh, st, td%dt, iter, td%max_iter, gr, hm)
+        call pes_calc(td%pesv, gr%mesh, st, td%dt, iter, gr, hm)
 
-      call td_write_iter(write_handler, gr, st, hm, geo, hm%ep%kick, td%dt, iter)
+      call td_write_iter(write_handler, gr, st, hm, geo, hm%ep%kick, td%dt, sys%ks, iter)
 
       ! write down data
       call check_point()
@@ -720,7 +717,7 @@ contains
     subroutine td_run_zero_iter()
       PUSH_SUB(td_run.td_run_zero_iter)
 
-      call td_write_iter(write_handler, gr, st, hm, geo, hm%ep%kick, td%dt, 0)
+      call td_write_iter(write_handler, gr, st, hm, geo, hm%ep%kick, td%dt, sys%ks, 0)
 
       ! I apply the delta electric field *after* td_write_iter, otherwise the
       ! dipole matrix elements in write_proj are wrong
@@ -1000,7 +997,7 @@ contains
     POP_SUB(td_load)
   end subroutine td_load
 
-end module td_m
+end module td_oct_m
 
 !! Local Variables:
 !! mode: f90

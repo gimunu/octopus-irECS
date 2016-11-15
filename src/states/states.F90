@@ -15,60 +15,57 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: states.F90 15089 2016-02-05 09:23:48Z umberto $
+!! $Id: states.F90 15724 2016-11-09 20:52:36Z nicolastd $
 
 #include "global.h"
 
-module states_m
-  use base_density_m
-  use base_states_m
-  use blacs_proc_grid_m
-  use calc_mode_par_m
-#ifdef HAVE_OPENCL
-  use cl
-#endif
-  use cmplxscl_m
-  use comm_m
-  use batch_m
-  use batch_ops_m
-  use blas_m
-  use derivatives_m
-  use distributed_m
-  use geometry_m
-  use global_m
-  use grid_m
-  use hardware_m
-  use io_m
-  use kpoints_m
-  use lalg_adv_m
-  use lalg_basic_m
-  use loct_m
-  use loct_pointer_m
-  use math_m
-  use mesh_m
-  use mesh_function_m
-  use messages_m
-  use modelmb_particles_m
-  use mpi_m ! if not before parser_m, ifort 11.072 can`t compile with MPI2
-  use mpi_lib_m
-  use multicomm_m
+module states_oct_m
+  use accel_oct_m
+  use base_density_oct_m
+  use base_states_oct_m
+  use blacs_proc_grid_oct_m
+  use calc_mode_par_oct_m
+  use cmplxscl_oct_m
+  use comm_oct_m
+  use batch_oct_m
+  use batch_ops_oct_m
+  use blas_oct_m
+  use derivatives_oct_m
+  use distributed_oct_m
+  use geometry_oct_m
+  use global_oct_m
+  use grid_oct_m
+  use hardware_oct_m
+  use io_oct_m
+  use kpoints_oct_m
+  use lalg_adv_oct_m
+  use lalg_basic_oct_m
+  use loct_oct_m
+  use loct_pointer_oct_m
+  use math_oct_m
+  use mesh_oct_m
+  use mesh_function_oct_m
+  use messages_oct_m
+  use modelmb_particles_oct_m
+  use mpi_oct_m ! if not before parser_m, ifort 11.072 can`t compile with MPI2
+  use mpi_lib_oct_m
+  use multicomm_oct_m
 #ifdef HAVE_OPENMP
   use omp_lib
 #endif
-  use opencl_m
-  use parser_m
-  use profiling_m
-  use restart_m
-  use simul_box_m
-  use smear_m
-  use states_group_m
-  use states_dim_m
-  use symmetrizer_m
-  use types_m
-  use unit_m
-  use unit_system_m
-  use utils_m
-  use varinfo_m
+  use parser_oct_m
+  use profiling_oct_m
+  use restart_oct_m
+  use simul_box_oct_m
+  use smear_oct_m
+  use states_group_oct_m
+  use states_dim_oct_m
+  use symmetrizer_oct_m
+  use types_oct_m
+  use unit_oct_m
+  use unit_system_oct_m
+  use utils_oct_m
+  use varinfo_oct_m
 
   implicit none
 
@@ -172,6 +169,9 @@ module states_m
 
     !> Subsystem states.
     type(base_states_t), pointer :: subsys_st
+
+    logical        :: calc_eigenval
+    logical        :: uniform_occ   !< .true. if occupations are equal for all states: no empty states, and no smearing
     
     FLOAT, pointer :: eigenval(:,:) !< obviously the eigenvalues
     logical        :: fixed_occ     !< should the occupation numbers be fixed?
@@ -211,7 +211,15 @@ module states_m
 
     logical                     :: symmetrize_density
     logical                     :: packed
+
+    integer                     :: randomization      !< Method used to generate random states
   end type states_t
+
+  !> Method used to generate random states
+  integer, public, parameter :: &
+    PAR_INDEPENDENT = 1,              &
+    PAR_DEPENDENT   = 2
+
 
   interface states_get_state
     module procedure dstates_get_state1, zstates_get_state1, dstates_get_state2, zstates_get_state2
@@ -327,7 +335,22 @@ contains
     !%End
     call parse_variable('ExcessCharge', M_ZERO, excess_charge)
 
-
+    !%Variable CalcEigenvalues
+    !%Type logical
+    !%Default yes
+    !%Section SCF
+    !%Description
+    !% (Experimental) When this variable is set to <tt>no</tt>,
+    !% Octopus will not calculate the eigenvalues or eigenvectors of
+    !% the Hamiltonian. Instead, Octopus will obtain the occupied
+    !% subspace. The advantage that calculation can be made faster by
+    !% avoiding subspace diagonalization and other calculations.
+    !%
+    !% This mode cannot be used with unoccupied states.    
+    !%End
+    call parse_variable('CalcEigenvalues', .true., st%calc_eigenval)
+    if(.not. st%calc_eigenval) call messages_experimental('CalcEigenvalues = .false.')
+    
     !%Variable TotalStates
     !%Type integer
     !%Default 0
@@ -382,6 +405,12 @@ contains
     call geometry_val_charge(geo, st%val_charge)
 
     st%qtot = -(st%val_charge + excess_charge)
+
+    if(st%qtot < -M_EPSILON) then
+      write(message(1),'(a,f12.6,a)') 'Total charge = ', st%qtot, ' < 0'
+      message(2) = 'Check Species and ExcessCharge.'
+      call messages_fatal(2, only_root_writes = .true.)
+    endif
 
     select case(st%d%ispin)
     case(UNPOLARIZED)
@@ -439,7 +468,7 @@ contains
     !$omp end parallel
 #endif    
 
-    if(opencl_is_enabled()) then
+    if(accel_is_enabled()) then
       default = 32
     else
       default = max(4, 2*nthreads)
@@ -505,6 +534,24 @@ contains
       nullify(st%spin)
     end if
 
+    !%Variable StatesRandomization
+    !%Type integer
+    !%Default par_independent
+    !%Section States
+    !%Description
+    !% The randomization of states can be done in two ways: 
+    !% i) a parallelisation independent way (default), where the random states are identical, 
+    !% irrespectively of the number of tasks and 
+    !% ii) a parallelisation dependent way, which can prevent linear dependency
+    !%  to occur for large systems.
+    !%Option par_independent 1
+    !% Parallelisation-independent randomization of states.
+    !%Option par_dependent 2
+    !% The randomization depends on the number of taks used in the calculation.
+    !%End
+    call parse_variable('StatesRandomization', PAR_INDEPENDENT, st%randomization)
+
+
     ! initially we mark all 'formulas' as undefined
     st%user_def_states(1:st%d%dim, 1:st%nst, 1:st%d%nik) = 'undefined'
 
@@ -541,7 +588,11 @@ contains
     !% When enabled the density is symmetrized. Currently, this can
     !% only be done for periodic systems. (Experimental.)
     !%End
-    call parse_variable('SymmetrizeDensity', .false., st%symmetrize_density)
+    if(gr%sb%kpoints%use_symmetries) then
+      call parse_variable('SymmetrizeDensity', .true., st%symmetrize_density)
+    else
+      call parse_variable('SymmetrizeDensity', .false., st%symmetrize_density)
+    end if
     call messages_print_var_value(stdout, 'SymmetrizeDensity', st%symmetrize_density)
 
     ! Why? Resulting discrepancies can be suspiciously large even at SCF convergence;
@@ -623,7 +674,7 @@ contains
     integer :: ik, ist, ispin, nspin, ncols, nrows, el_per_state, icol, start_pos, spin_n
     type(block_t) :: blk
     FLOAT :: rr, charge
-    logical :: integral_occs
+    logical :: integral_occs, unoccupied_states
     FLOAT, allocatable :: read_occs(:, :)
     FLOAT :: charge_in_block
 
@@ -649,20 +700,38 @@ contains
     !% variable. For example:
     !%
     !% <tt>%Occupations
-    !% <br>&nbsp;&nbsp;2.0 | 2.0 | 2.0 | 2.0 | 2.0
+    !% <br>&nbsp;&nbsp;2 | 2 | 2 | 2 | 2
     !% <br>%</tt>
     !%
-    !% would fix the occupations of the five states to <i>2.0</i>. There can be
+    !% would fix the occupations of the five states to 2. There can be
     !% at most as many columns as states in the calculation. If there are fewer columns
     !% than states, then the code will assume that the user is indicating the occupations
-    !% of the uppermost states, assigning maximum occupation (i.e. 2 for spin-unpolarized
-    !% calculations, 1 otherwise) to the lower states. The number of rows should be equal
+    !% of the uppermost states where all lower states have full occupation (i.e. 2 for spin-unpolarized
+    !% calculations, 1 otherwise) and all higher states have zero occupation. The first column
+    !% will be taken to refer to the lowest state such that the occupations would be consistent
+    !% with the correct total charge. For example, if there are 8 electrons and 10 states (from
+    !% <tt>ExtraStates = 6</tt>), then an abbreviated specification
+    !%
+    !% <tt>%Occupations
+    !% <br>&nbsp;&nbsp;1 | 0 | 1
+    !% <br>%</tt>
+    !%
+    !% would be equivalent to a full specification
+    !%
+    !% <tt>%Occupations
+    !% <br>&nbsp;&nbsp;2 | 2 | 2 | 1 | 0 | 1 | 0 | 0 | 0 | 0
+    !% <br>%</tt>
+    !%
+    !% This is an example of use for constrained density-functional theory,
+    !% crudely emulating a HOMO->LUMO+1 optical excitation.
+    !% The number of rows should be equal
     !% to the number of k-points times the number of spins. For example, for a finite system
     !% with <tt>SpinComponents == spin_polarized</tt>,
     !% this block should contain two lines, one for each spin channel.
     !% All rows must have the same number of columns.
-    !% This variable is very useful when dealing with highly symmetric small systems
-    !% (like an open-shell atom), for it allows us to fix the occupation numbers
+    !%
+    !% The <tt>Occupations</tt> block is useful for the ground state of highly symmetric
+    !% small systems (like an open-shell atom), to fix the occupation numbers
     !% of degenerate states in order to help <tt>octopus</tt> to converge. This is to
     !% be used in conjuction with <tt>ExtraStates</tt>. For example, to calculate the
     !% carbon atom, one would do:
@@ -825,10 +894,11 @@ contains
 
     call smear_init(st%smear, st%d%ispin, st%fixed_occ, integral_occs, kpoints)
 
+    unoccupied_states = (st%d%ispin /= SPINORS .and. st%nst*2 > st%qtot) .or. (st%d%ispin == SPINORS .and. st%nst > st%qtot)
+    
     if(.not. smear_is_semiconducting(st%smear) .and. .not. st%smear%method == SMEAR_FIXED_OCC) then
-      if((st%d%ispin /= SPINORS .and. st%nst * 2  <=  st%qtot) .or. &
-        (st%d%ispin == SPINORS .and. st%nst  <=  st%qtot)) then
-        call messages_write('Smearing needs unoccupied states (via ExtraStates) to be useful.')
+      if(.not. unoccupied_states) then
+        call messages_write('Smearing needs unoccupied states (via ExtraStates or TotalStates) to be useful.')
         call messages_warning()
       end if
     end if
@@ -844,6 +914,14 @@ contains
       call messages_fatal(2, only_root_writes = .true.)
     end if
 
+    st%uniform_occ = smear_is_semiconducting(st%smear) .and. .not. unoccupied_states
+
+    if(.not. st%calc_eigenval .and. .not. st%uniform_occ) then
+      call messages_write('Calculation of the eigenvalues is required with unoccupied states', new_line = .true.)
+      call messages_write('or smearing.')
+      call messages_fatal()
+    end if
+    
     POP_SUB(states_read_initial_occs)
   end subroutine states_read_initial_occs
 
@@ -1375,6 +1453,9 @@ contains
 
     end if
 
+    stout%calc_eigenval = stin%calc_eigenval
+    stout%uniform_occ = stin%uniform_occ
+    
     if(.not. optional_default(exclude_eigenval, .false.)) then
       call loct_pointer_copy(stout%zeigenval%Re, stin%zeigenval%Re)
       stout%eigenval => stout%zeigenval%Re
@@ -1433,7 +1514,7 @@ contains
 
     stout%symmetrize_density = stin%symmetrize_density
 
-    if(.not. exclude_wfns_) call states_group_copy(stin%group, stout%group)
+    if(.not. exclude_wfns_) call states_group_copy(stin%d,stin%group, stout%group)
 
     stout%packed = stin%packed
 
@@ -1517,20 +1598,34 @@ contains
 
   ! ---------------------------------------------------------
   !> generate a hydrogen s-wavefunction around a random point
-  subroutine states_generate_random(st, mesh, ist_start_, ist_end_)
+  subroutine states_generate_random(st, mesh, ist_start_, ist_end_, ikpt_start_, ikpt_end_, normalized)
     type(states_t),    intent(inout) :: st
     type(mesh_t),      intent(in)    :: mesh
-    integer, optional, intent(in)    :: ist_start_, ist_end_
-
-    integer :: ist, ik, id, ist_start, ist_end, jst
+    integer, optional, intent(in)    :: ist_start_
+    integer, optional, intent(in)    :: ist_end_
+    integer, optional, intent(in)    :: ikpt_start_
+    integer, optional, intent(in)    :: ikpt_end_
+    logical, optional, intent(in)    :: normalized !< whether generate states should have norm 1, true by default
+    
+    integer :: ist, ik, id, ist_start, ist_end, jst, ikpt_start, ikpt_end
     CMPLX   :: alpha, beta
     FLOAT, allocatable :: dpsi(:,  :)
     CMPLX, allocatable :: zpsi(:,  :), zpsi2(:)
 
     PUSH_SUB(states_generate_random)
-
+ 
     ist_start = optional_default(ist_start_, 1)
-    ist_end   = optional_default(ist_end_,   st%nst)
+    if(st%randomization == PAR_INDEPENDENT) then
+      ist_start = optional_default(ist_start_, st%st_start)
+      ist_end = st%st_end 
+      ikpt_start = optional_default(ikpt_start_, st%d%kpt%start)
+      ikpt_end = optional_default(ikpt_end_, st%d%kpt%end)
+    else 
+      ist_start = optional_default(ist_start_, 1)
+      ist_end = optional_default(ist_end_,   st%nst)
+      ikpt_start = optional_default(ikpt_start_, 1)
+      ikpt_end = optional_default(ikpt_end_, st%d%nik)
+    end if
 
     if (states_are_real(st)) then
       SAFE_ALLOCATE(dpsi(1:mesh%np, 1:st%d%dim))
@@ -1541,19 +1636,31 @@ contains
     select case(st%d%ispin)
     case(UNPOLARIZED, SPIN_POLARIZED)
 
-      do ik = 1, st%d%nik
+      do ik = ikpt_start, ikpt_end
         do ist = ist_start, ist_end
           if (states_are_real(st)) then
-            call dmf_random(mesh, dpsi(:, 1))
-            if(.not. state_kpt_is_local(st, ist, ik)) cycle
+            if(st%randomization == PAR_INDEPENDENT) then
+              call dmf_random(mesh, dpsi(:, 1), mesh%vp%xlocal-1, normalized = normalized)
+            else
+              call dmf_random(mesh, dpsi(:, 1), normalized = normalized)
+              if(.not. state_kpt_is_local(st, ist, ik)) cycle
+            end if
             call states_set_state(st, mesh, ist,  ik, dpsi)
           else
-            call zmf_random(mesh, zpsi(:, 1))
-            if(.not. state_kpt_is_local(st, ist, ik)) cycle
+            if(st%randomization == PAR_INDEPENDENT) then
+              call zmf_random(mesh, zpsi(:, 1), mesh%vp%xlocal-1, normalized = normalized)
+            else
+              call zmf_random(mesh, zpsi(:, 1), normalized = normalized)
+              if(.not. state_kpt_is_local(st, ist, ik)) cycle
+            end if
             call states_set_state(st, mesh, ist,  ik, zpsi)
             if(st%have_left_states) then
-              call zmf_random(mesh, zpsi(:, 1))
-              if(.not. state_kpt_is_local(st, ist, ik)) cycle
+              if(st%randomization == PAR_INDEPENDENT) then
+                call zmf_random(mesh, zpsi(:, 1), mesh%vp%xlocal-1, normalized = normalized)
+              else
+                call zmf_random(mesh, zpsi(:, 1), normalized = normalized)
+                if(.not. state_kpt_is_local(st, ist, ik)) cycle
+              end if
               call states_set_state(st, mesh, ist,  ik, zpsi, left = .true.)
             end if
           end if
@@ -1566,10 +1673,14 @@ contains
 
       if(st%fixed_spins) then
 
-        do ik = 1, st%d%nik
+        do ik = ikpt_start, ikpt_end
           do ist = ist_start, ist_end
-            call zmf_random(mesh, zpsi(:, 1))
-            if(.not. state_kpt_is_local(st, ist, ik)) cycle
+            if(st%randomization == PAR_INDEPENDENT) then
+              call zmf_random(mesh, zpsi(:, 1), mesh%vp%xlocal-1, normalized = normalized)
+            else
+              call zmf_random(mesh, zpsi(:, 1), normalized = normalized)
+              if(.not. state_kpt_is_local(st, ist, ik)) cycle
+            end if
             ! In this case, the spinors are made of a spatial part times a vector [alpha beta]^T in
             ! spin space (i.e., same spatial part for each spin component). So (alpha, beta)
             ! determines the spin values. The values of (alpha, beta) can be be obtained
@@ -1599,10 +1710,14 @@ contains
           end do
         end do
       else
-        do ik = 1, st%d%nik
+        do ik = ikpt_start, ikpt_end
           do ist = ist_start, ist_end
             do id = 1, st%d%dim
-              call zmf_random(mesh, zpsi(:, id))
+              if(st%randomization == PAR_INDEPENDENT) then
+                call zmf_random(mesh, zpsi(:, id), mesh%vp%xlocal-1, normalized = normalized)
+              else
+                call zmf_random(mesh, zpsi(:, id), normalized = normalized)
+              end if
             end do
             if(.not. state_kpt_is_local(st, ist, ik)) cycle
             call states_set_state(st, mesh, ist,  ik, zpsi)
@@ -2025,17 +2140,6 @@ contains
                  - ww*M_TWO*aimag(conjg(wf_psi(1:der%mesh%np, 1))*kpoint(i_dim)*gwf_psi(1:der%mesh%np, i_dim, 1) )
           end if
 
-          if(present(gi_kinetic_energy_density)) then
-            ASSERT(associated(tau))
-            if(states_are_complex(st)) then
-              ASSERT(associated(jp))
-              gi_kinetic_energy_density(1:der%mesh%np, is) = tau(1:der%mesh%np, is) - &
-                   jp(1:der%mesh%np, i_dim, 1)**2/st%rho(1:der%mesh%np, 1)
-            else
-              gi_kinetic_energy_density(1:der%mesh%np, is) = tau(1:der%mesh%np, is)
-            end if
-          end if
-
           if(st%d%ispin == SPINORS) then
             if(present(density_gradient)) then
               density_gradient(1:der%mesh%np, i_dim, 2) = density_gradient(1:der%mesh%np, i_dim, 2) + &
@@ -2095,15 +2199,40 @@ contains
     SAFE_DEALLOCATE_A(gwf_psi)
     SAFE_DEALLOCATE_A(lwf_psi)
 
-    if(.not. present(paramagnetic_current)) then
-      SAFE_DEALLOCATE_P(jp)
+    if(.not. present(gi_kinetic_energy_density)) then
+      if(.not. present(paramagnetic_current)) then
+        SAFE_DEALLOCATE_P(jp)
+      end if
+      if(.not. present(kinetic_energy_density)) then
+        SAFE_DEALLOCATE_P(tau)
+      end if
+    end if
+
+    if(st%parallel_in_states .or. st%d%kpt%parallel) call reduce_all(st%st_kpt_mpi_grp)
+
+    !We compute the gauge-invariant kinetic energy density
+    if(present(gi_kinetic_energy_density) .and. st%d%ispin /= SPINORS) then
+      do is = 1, st%d%nspin
+        ASSERT(associated(tau))
+        gi_kinetic_energy_density(1:der%mesh%np, is) = tau(1:der%mesh%np, is)
+        if(states_are_complex(st)) then
+          ASSERT(associated(jp))
+          do i_dim = 1, der%mesh%sb%dim
+            gi_kinetic_energy_density(1:der%mesh%np, is) = &
+                gi_kinetic_energy_density(1:der%mesh%np, is) - &
+                jp(1:der%mesh%np, i_dim, is)**2/st%rho(1:der%mesh%np, is)
+          end do
+        end if
+      end do
     end if
 
     if(.not. present(kinetic_energy_density)) then
       SAFE_DEALLOCATE_P(tau)
     end if
+    if(.not. present(paramagnetic_current)) then
+      SAFE_DEALLOCATE_P(jp)
+    end if
 
-    if(st%parallel_in_states .or. st%d%kpt%parallel) call reduce_all(st%st_kpt_mpi_grp)
 
     POP_SUB(states_calc_quantities)
 
@@ -2115,9 +2244,6 @@ contains
       PUSH_SUB(states_calc_quantities.reduce_all)
 
       if(associated(tau)) call comm_allreduce(grp%comm, tau, dim = (/der%mesh%np, st%d%nspin/))
-
-      if(present(gi_kinetic_energy_density)) &
-        call comm_allreduce(grp%comm, gi_kinetic_energy_density, dim = (/der%mesh%np, st%d%nspin/))
 
       if (present(density_laplacian)) call comm_allreduce(grp%comm, density_laplacian, dim = (/der%mesh%np, st%d%nspin/))
 
@@ -2204,9 +2330,7 @@ contains
 
     integer :: iqn, ib
     integer(8) :: max_mem, mem
-#ifdef HAVE_OPENCL
     FLOAT, parameter :: mem_frac = 0.75
-#endif
 
     PUSH_SUB(states_pack)
 
@@ -2214,10 +2338,9 @@ contains
 
     st%packed = .true.
 
-    if(opencl_is_enabled()) then
-#ifdef HAVE_OPENCL
-      call clGetDeviceInfo(opencl%device, CL_DEVICE_GLOBAL_MEM_SIZE, max_mem, cl_status)
-#endif
+    if(accel_is_enabled()) then
+      max_mem = accel_global_memory_size()
+      
       if(st%d%cl_states_mem > CNST(1.0)) then
         max_mem = int(st%d%cl_states_mem, 8)*(1024_8)**2
       else if(st%d%cl_states_mem < CNST(0.0)) then
@@ -2562,7 +2685,7 @@ contains
 #include "states_inc.F90"
 #include "undef.F90"
 
-end module states_m
+end module states_oct_m
 
 
 !! Local Variables:

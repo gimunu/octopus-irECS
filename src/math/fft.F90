@@ -16,42 +16,41 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: fft.F90 14470 2015-07-29 09:02:39Z dannert $
+!! $Id: fft.F90 15567 2016-08-03 18:10:30Z xavier $
 
 #include "global.h"
 
 !> Fast Fourier Transform module.
 !! This module provides a single interface that works with different
 !! FFT implementations.
-module fft_m
+module fft_oct_m
+  use accel_oct_m
   use,intrinsic :: iso_c_binding
 #ifdef HAVE_OPENCL  
   use cl
-#ifdef HAVE_CLAMDFFT
-  use clAmdFft
+#ifdef HAVE_CLFFT
+  use clfft
 #endif
 #endif
-  use fftw_m
-  use global_m
-  use lalg_basic_m
-  use loct_math_m
-  use messages_m
-  use mpi_m
+  use fftw_oct_m
+  use global_oct_m
+  use lalg_basic_oct_m
+  use loct_math_oct_m
+  use messages_oct_m
+  use mpi_oct_m
 #if defined(HAVE_NFFT)
-  use nfft_m
+  use nfft_oct_m
 #endif
 #if defined(HAVE_OPENMP) && defined(HAVE_FFTW3_THREADS)
   use omp_lib
 #endif
-  use octcl_kernel_m
-  use opencl_m
-  use parser_m
-  use pfft_m
-  use pnfft_m
-  use profiling_m
-  use types_m
-  use unit_system_m
-  use varinfo_m
+  use parser_oct_m
+  use pfft_oct_m
+  use pnfft_oct_m
+  use profiling_oct_m
+  use types_oct_m
+  use unit_system_oct_m
+  use varinfo_oct_m
 
   implicit none
 
@@ -77,7 +76,8 @@ module fft_m
     dfft_forward1,     &
     zfft_forward1,     &
     dfft_backward1,    &
-    zfft_backward1
+    zfft_backward1,    &
+    fft_scaling_factor
 
 
   !> global constants
@@ -90,7 +90,7 @@ module fft_m
        FFTLIB_NONE  = 0, &
        FFTLIB_FFTW  = 1, &
        FFTLIB_PFFT  = 2, &
-       FFTLIB_CLAMD = 3, &
+       FFTLIB_ACCEL = 3, &
        FFTLIB_NFFT  = 4, &
        FFTLIB_PNFFT = 5
        
@@ -124,11 +124,13 @@ module fft_m
     FLOAT, pointer :: drs_data(:,:,:) !< array used to store the function in real space that is passed to PFFT.
     CMPLX, pointer :: zrs_data(:,:,:) !< array used to store the function in real space that is passed to PFFT.
     CMPLX, pointer ::  fs_data(:,:,:) !< array used to store the function in fourier space that is passed to PFFT
-#ifdef HAVE_CLAMDFFT
-    !> data for clAmdFft
-    type(clAmdFftPlanHandle) :: cl_plan_fw 
-    type(clAmdFftPlanHandle) :: cl_plan_bw !< for real transforms we need a different plan, so we always use 2
+#ifdef HAVE_CLFFT
+    !> data for clfft
+    type(clfftPlanHandle) :: cl_plan_fw 
+    type(clfftPlanHandle) :: cl_plan_bw !< for real transforms we need a different plan, so we always use 2
 #endif
+    type(c_ptr)           :: cuda_plan_fw
+    type(c_ptr)           :: cuda_plan_bw
 #ifdef HAVE_NFFT
     type(nfft_t) :: nfft 
 #endif
@@ -142,6 +144,14 @@ module fft_m
   type(fft_t), save :: fft_array(FFT_MAX)
   logical           :: fft_optimize
   integer           :: fft_prepare_plan
+
+  integer, parameter ::  &
+    CUFFT_R2C = z'2a',   &
+    CUFFT_C2R = z'2c',   &
+    CUFFT_C2C = z'29',   &
+    CUFFT_D2Z = z'6a',   &
+    CUFFT_Z2D = z'6c',   &
+    CUFFT_Z2Z = z'69'
 
 contains
 
@@ -279,7 +289,7 @@ contains
     integer :: library_
     type(mpi_grp_t) :: mpi_grp_
 
-#ifdef HAVE_CLAMDFFT
+#ifdef HAVE_CLFFT
     real(8) :: scale
 #endif
 
@@ -308,19 +318,23 @@ contains
     nn_temp(1:fft_dim) = nn(1:fft_dim)
 
     select case (library_)
-    case (FFTLIB_CLAMD)
+    case (FFTLIB_ACCEL)
     
       do ii = 1, fft_dim
         ! the AMD OpenCL FFT only supports sizes 2, 3 and 5, but size
         ! 5 gives an fpe error on the Radeon 7970 (APPML 1.8), so we
         ! only use factors 2 and 3
+#ifdef HAVE_CLFFT
         nn_temp(ii) = fft_size(nn(ii), (/2, 3/))
+#else
+        nn_temp(ii) = fft_size(nn(ii), (/2, 3, 5, 7/))
+#endif
         if(fft_optimize .and. optimize(ii)) nn(ii) = nn_temp(ii)
       end do 
       
       ! if we can't optimize, in some cases we can't use the library
       if(any(nn(1:fft_dim) /= nn_temp(1:fft_dim))) then
-        call messages_write('Invalid grid size for clAmdFft. FFTW will be used instead.')
+        call messages_write('Invalid grid size for clfft. FFTW will be used instead.')
         call messages_warning()
         library_ = FFTLIB_FFTW
       end if
@@ -446,6 +460,13 @@ contains
       call pfft_get_dims(fft_array(jj)%rs_n_global, mpi_comm, type == FFT_REAL, &
            alloc_size, fft_array(jj)%fs_n_global, fft_array(jj)%rs_n, &
            fft_array(jj)%fs_n, fft_array(jj)%rs_istart, fft_array(jj)%fs_istart)
+      !write(*,"(6(A,3I4,/),A,I10,/)") "PFFT: rs_n_global = ",fft_array(jj)%rs_n_global,&
+      !  "fs_n_global = ",fft_array(jj)%fs_n_global,&
+      !  "rs_n        = ",fft_array(jj)%rs_n,&
+      !  "fs_n        = ",fft_array(jj)%fs_n,&
+      !  "rs_istart   = ",fft_array(jj)%rs_istart,&
+      !  "fs_istart   = ",fft_array(jj)%fs_istart,&
+      !  "alloc_size  = ",alloc_size
 #endif
 
       ! Allocate memory. Note that PFFT may need extra memory space 
@@ -473,7 +494,7 @@ contains
       n3 = ceiling(real(alloc_size)/real(n_3*n_1))
       SAFE_ALLOCATE(fft_array(jj)%fs_data(1:n_3, 1:n_1, 1:n3))
 
-    case(FFTLIB_CLAMD)
+    case(FFTLIB_ACCEL)
       call fftw_get_dims(fft_array(jj)%rs_n_global, (type == FFT_REAL), fft_array(jj)%fs_n_global)
       fft_array(jj)%rs_n = fft_array(jj)%rs_n_global
       fft_array(jj)%fs_n = fft_array(jj)%fs_n_global
@@ -551,80 +572,7 @@ contains
       
 #endif
 
-    case(FFTLIB_CLAMD)
-#ifdef HAVE_CLAMDFFT
-
-      ! create the plans
-      call clAmdFftCreateDefaultPlan(fft_array(jj)%cl_plan_fw, opencl%context, fft_dim, int(fft_array(jj)%rs_n_global, 8), status)
-      if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clAmdFftCreateDefaultPlan')
-
-      call clAmdFftCreateDefaultPlan(fft_array(jj)%cl_plan_bw, opencl%context, fft_dim, int(fft_array(jj)%rs_n_global, 8), status)
-      if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clAmdFftCreateDefaultPlan')
-
-      ! set precision
-
-      call clAmdFftSetPlanPrecision(fft_array(jj)%cl_plan_fw, CLFFT_DOUBLE, status)
-      if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clAmdFftSetPlanPrecision')
-
-      call clAmdFftSetPlanPrecision(fft_array(jj)%cl_plan_bw, CLFFT_DOUBLE, status)
-      if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clAmdFftSetPlanPrecision')
-
-      ! set number of transforms to 1
-
-      call clAmdFftSetPlanBatchSize(fft_array(jj)%cl_plan_fw, 1_8, status)
-      if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clAmdFftSetPlanBatchSize')
-
-      call clAmdFftSetPlanBatchSize(fft_array(jj)%cl_plan_bw, 1_8, status)
-      if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clAmdFftSetPlanBatchSize')
-
-      ! set the type precision to double
-
-      call clAmdFftSetPlanPrecision(fft_array(jj)%cl_plan_fw, CLFFT_DOUBLE, status)
-      if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clAmdFftSetPlanPrecision')
-
-      call clAmdFftSetPlanPrecision(fft_array(jj)%cl_plan_bw, CLFFT_DOUBLE, status)
-      if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clAmdFftSetPlanPrecision')
-
-
-      ! set the layout
-
-      if(type == FFT_REAL) then
-
-        call clAmdFftSetLayout(fft_array(jj)%cl_plan_fw, CLFFT_REAL, CLFFT_HERMITIAN_INTERLEAVED, status)
-        if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clAmdFftSetLayout')
-
-        call clAmdFftSetLayout(fft_array(jj)%cl_plan_bw, CLFFT_HERMITIAN_INTERLEAVED, CLFFT_REAL, status)
-        if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clAmdFftSetLayout')
-
-      else
-
-        call clAmdFftSetLayout(fft_array(jj)%cl_plan_fw, CLFFT_COMPLEX_INTERLEAVED, CLFFT_COMPLEX_INTERLEAVED, status)
-        if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clAmdFftSetLayout')
-
-        call clAmdFftSetLayout(fft_array(jj)%cl_plan_bw, CLFFT_COMPLEX_INTERLEAVED, CLFFT_COMPLEX_INTERLEAVED, status)
-        if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clAmdFftSetLayout')
-
-      end if
-
-      ! set the plans as at out of place
-
-      call clAmdFftSetResultLocation(fft_array(jj)%cl_plan_fw, CLFFT_OUTOFPLACE, status)
-      if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clAmdFftSetResultLocation')
-
-      call clAmdFftSetResultLocation(fft_array(jj)%cl_plan_bw, CLFFT_OUTOFPLACE, status)
-      if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clAmdFftSetResultLocation')
-
-      ! invert the stride for Fortran arrays
-
-!      call clAmdFftGetPlanInStride(fft_array(jj)%cl_plan_bw, fft_dim, stride_rs, status)
-!      if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clAmdFftGetPlanInStride')
-
-
-!      call clAmdFftGetPlanInStride(fft_array(jj)%cl_plan_fw, fft_dim, stride_fs, status)
-!      if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clAmdFftGetPlanInStride')
-
-!      print*, "STRIDE IN     ", stride_rs
-!      print*, "STRIDE OUT    ", stride_fs
+    case(FFTLIB_ACCEL)
 
       fft_array(jj)%stride_rs(1) = 1
       fft_array(jj)%stride_fs(1) = 1
@@ -633,58 +581,126 @@ contains
         fft_array(jj)%stride_fs(ii) = fft_array(jj)%stride_fs(ii - 1)*fft_array(jj)%fs_n(ii - 1)
       end do
 
-!      print*, "STRIDE NEW IN ", stride_rs
-!      print*, "STRIDE NEW OUT", stride_fs
+#ifdef HAVE_CUDA
+      call cuda_fft_plan3d(fft_array(jj)%cuda_plan_fw, &
+        fft_array(jj)%rs_n_global(3), fft_array(jj)%rs_n_global(2), fft_array(jj)%rs_n_global(1), CUFFT_D2Z)
+      call cuda_fft_plan3d(fft_array(jj)%cuda_plan_bw, &
+        fft_array(jj)%rs_n_global(3), fft_array(jj)%rs_n_global(2), fft_array(jj)%rs_n_global(1), CUFFT_Z2D)
+#endif
+      
+#ifdef HAVE_CLFFT
+
+      ! create the plans
+      call clfftCreateDefaultPlan(fft_array(jj)%cl_plan_fw, accel%context%cl_context, &
+        fft_dim, int(fft_array(jj)%rs_n_global, 8), status)
+      if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clfftCreateDefaultPlan')
+
+      call clfftCreateDefaultPlan(fft_array(jj)%cl_plan_bw, accel%context%cl_context, &
+        fft_dim, int(fft_array(jj)%rs_n_global, 8), status)
+      if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clfftCreateDefaultPlan')
+
+      ! set precision
+
+      call clfftSetPlanPrecision(fft_array(jj)%cl_plan_fw, CLFFT_DOUBLE, status)
+      if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clfftSetPlanPrecision')
+
+      call clfftSetPlanPrecision(fft_array(jj)%cl_plan_bw, CLFFT_DOUBLE, status)
+      if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clfftSetPlanPrecision')
+
+      ! set number of transforms to 1
+
+      call clfftSetPlanBatchSize(fft_array(jj)%cl_plan_fw, 1_8, status)
+      if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clfftSetPlanBatchSize')
+
+      call clfftSetPlanBatchSize(fft_array(jj)%cl_plan_bw, 1_8, status)
+      if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clfftSetPlanBatchSize')
+
+      ! set the type precision to double
+
+      call clfftSetPlanPrecision(fft_array(jj)%cl_plan_fw, CLFFT_DOUBLE, status)
+      if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clfftSetPlanPrecision')
+
+      call clfftSetPlanPrecision(fft_array(jj)%cl_plan_bw, CLFFT_DOUBLE, status)
+      if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clfftSetPlanPrecision')
+
+
+      ! set the layout
+
+      if(type == FFT_REAL) then
+
+        call clfftSetLayout(fft_array(jj)%cl_plan_fw, CLFFT_REAL, CLFFT_HERMITIAN_INTERLEAVED, status)
+        if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clfftSetLayout')
+
+        call clfftSetLayout(fft_array(jj)%cl_plan_bw, CLFFT_HERMITIAN_INTERLEAVED, CLFFT_REAL, status)
+        if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clfftSetLayout')
+
+      else
+
+        call clfftSetLayout(fft_array(jj)%cl_plan_fw, CLFFT_COMPLEX_INTERLEAVED, CLFFT_COMPLEX_INTERLEAVED, status)
+        if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clfftSetLayout')
+
+        call clfftSetLayout(fft_array(jj)%cl_plan_bw, CLFFT_COMPLEX_INTERLEAVED, CLFFT_COMPLEX_INTERLEAVED, status)
+        if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clfftSetLayout')
+
+      end if
+
+      ! set the plans as at out of place
+
+      call clfftSetResultLocation(fft_array(jj)%cl_plan_fw, CLFFT_OUTOFPLACE, status)
+      if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clfftSetResultLocation')
+
+      call clfftSetResultLocation(fft_array(jj)%cl_plan_bw, CLFFT_OUTOFPLACE, status)
+      if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clfftSetResultLocation')
 
       ! the strides
       
-      call clAmdFftSetPlanInStride(fft_array(jj)%cl_plan_fw, fft_dim, int(fft_array(jj)%stride_rs, 8), status)
-      if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clAmdFftSetPlanInStride')
+      call clfftSetPlanInStride(fft_array(jj)%cl_plan_fw, fft_dim, int(fft_array(jj)%stride_rs, 8), status)
+      if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clfftSetPlanInStride')
 
-      call clAmdFftSetPlanOutStride(fft_array(jj)%cl_plan_fw, fft_dim, int(fft_array(jj)%stride_fs, 8), status)
-      if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clAmdFftSetPlanOutStride')
+      call clfftSetPlanOutStride(fft_array(jj)%cl_plan_fw, fft_dim, int(fft_array(jj)%stride_fs, 8), status)
+      if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clfftSetPlanOutStride')
 
-      call clAmdFftSetPlanInStride(fft_array(jj)%cl_plan_bw, fft_dim, int(fft_array(jj)%stride_fs, 8), status)
-      if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clAmdFftSetPlanInStride')
+      call clfftSetPlanInStride(fft_array(jj)%cl_plan_bw, fft_dim, int(fft_array(jj)%stride_fs, 8), status)
+      if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clfftSetPlanInStride')
 
-      call clAmdFftSetPlanOutStride(fft_array(jj)%cl_plan_bw, fft_dim, int(fft_array(jj)%stride_rs, 8), status)
-      if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clAmdFftSetPlanOutStride')
+      call clfftSetPlanOutStride(fft_array(jj)%cl_plan_bw, fft_dim, int(fft_array(jj)%stride_rs, 8), status)
+      if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clfftSetPlanOutStride')
        
       ! set the scaling factors
 
       scale = 1.0_8/(product(real(fft_array(jj)%rs_n_global(1:fft_dim), 8)))
 
-      call clAmdFftSetPlanScale(fft_array(jj)%cl_plan_fw, CLFFT_FORWARD, 1.0_8, status)
-      if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clAmdFftSetPlanScale')
+      call clfftSetPlanScale(fft_array(jj)%cl_plan_fw, CLFFT_FORWARD, 1.0_8, status)
+      if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clfftSetPlanScale')
 
-      call clAmdFftSetPlanScale(fft_array(jj)%cl_plan_fw, CLFFT_BACKWARD, scale, status)
-      if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clAmdFftSetPlanScale')
+      call clfftSetPlanScale(fft_array(jj)%cl_plan_fw, CLFFT_BACKWARD, scale, status)
+      if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clfftSetPlanScale')
 
       if(type == FFT_REAL) then
         
-        call clAmdFftSetPlanScale(fft_array(jj)%cl_plan_bw, CLFFT_FORWARD, 1.0_8, status)
-        if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clAmdFftSetPlanScale')
+        call clfftSetPlanScale(fft_array(jj)%cl_plan_bw, CLFFT_FORWARD, 1.0_8, status)
+        if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clfftSetPlanScale')
         
-        call clAmdFftSetPlanScale(fft_array(jj)%cl_plan_bw, CLFFT_BACKWARD, scale, status)
-        if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clAmdFftSetPlanScale')
+        call clfftSetPlanScale(fft_array(jj)%cl_plan_bw, CLFFT_BACKWARD, scale, status)
+        if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clfftSetPlanScale')
 
       else
         
-        call clAmdFftSetPlanScale(fft_array(jj)%cl_plan_bw, CLFFT_FORWARD, scale, status)
-        if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clAmdFftSetPlanScale')
+        call clfftSetPlanScale(fft_array(jj)%cl_plan_bw, CLFFT_FORWARD, scale, status)
+        if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clfftSetPlanScale')
         
-        call clAmdFftSetPlanScale(fft_array(jj)%cl_plan_bw, CLFFT_BACKWARD, 1.0_8, status)
-        if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clAmdFftSetPlanScale')
+        call clfftSetPlanScale(fft_array(jj)%cl_plan_bw, CLFFT_BACKWARD, 1.0_8, status)
+        if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clfftSetPlanScale')
 
       end if
 
       ! now 'bake' the plans, this signals that the plans are ready to use
 
-      call clAmdFftBakePlan(fft_array(jj)%cl_plan_fw, opencl%command_queue, status)
-      if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clAmdFftBakePlan')
+      call clfftBakePlan(fft_array(jj)%cl_plan_fw, accel%command_queue, status)
+      if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clfftBakePlan')
 
-      call clAmdFftBakePlan(fft_array(jj)%cl_plan_bw, opencl%command_queue, status)
-      if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clAmdFftBakePlan')
+      call clfftBakePlan(fft_array(jj)%cl_plan_bw, accel%command_queue, status)
+      if(status /= CLFFT_SUCCESS) call clfft_print_error(status, 'clfftBakePlan')
 
 #endif
 
@@ -777,7 +793,7 @@ contains
 #endif
     case (FFTLIB_PFFT)
     !Do nothing 
-    case(FFTLIB_CLAMD)
+    case(FFTLIB_ACCEL)
     !Do nothing 
     case(FFTLIB_PNFFT)
 #ifdef HAVE_PNFFT
@@ -820,10 +836,15 @@ contains
           SAFE_DEALLOCATE_P(fft_array(ii)%drs_data)
           SAFE_DEALLOCATE_P(fft_array(ii)%zrs_data)
           SAFE_DEALLOCATE_P(fft_array(ii)%fs_data)
-#ifdef HAVE_CLAMDFFT
-        case(FFTLIB_CLAMD)
-          call clAmdFftDestroyPlan(fft_array(ii)%cl_plan_fw, status)
-          call clAmdFftDestroyPlan(fft_array(ii)%cl_plan_bw, status)
+
+        case(FFTLIB_ACCEL)
+#ifdef HAVE_CUDA
+          call cuda_fft_destroy(fft_array(ii)%cuda_plan_fw)
+          call cuda_fft_destroy(fft_array(ii)%cuda_plan_bw)
+#endif
+#ifdef HAVE_CLFFT
+          call clfftDestroyPlan(fft_array(ii)%cl_plan_fw, status)
+          call clfftDestroyPlan(fft_array(ii)%cl_plan_bw, status)
 #endif
 
 #ifdef HAVE_NFFT
@@ -981,6 +1002,26 @@ contains
   end subroutine fft_operation_count
 
 
+  ! ----------------------------------------------------------
+  
+  !> This function returns the factor required to normalize a function
+  !> after a forward and backward transform.  
+  FLOAT pure function fft_scaling_factor(fft) result(scaling_factor)
+    type(fft_t), intent(in)  :: fft
+
+    ! for the moment this factor is handled by the backwards transform for most libraries
+    scaling_factor = M_ONE
+    
+    select case (fft_array(fft%slot)%library)
+    case(FFTLIB_ACCEL)
+#ifdef HAVE_CUDA
+      scaling_factor = &
+        M_ONE/(fft_array(fft%slot)%rs_n_global(1)*fft_array(fft%slot)%rs_n_global(2)*fft_array(fft%slot)%rs_n_global(3))
+#endif
+    end select
+  
+  end function fft_scaling_factor
+
 #include "undef.F90"
 #include "real.F90"
 #include "fft_inc.F90"
@@ -989,7 +1030,7 @@ contains
 #include "complex.F90"
 #include "fft_inc.F90"
 
-end module fft_m
+end module fft_oct_m
 
 !! Local Variables:
 !! mode: f90

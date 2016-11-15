@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: io_function_inc.F90 14976 2016-01-05 14:27:54Z xavier $
+!! $Id: io_function_inc.F90 15648 2016-10-14 10:34:30Z rozzi $
 
 ! ---------------------------------------------------------
 !
@@ -1204,10 +1204,10 @@ contains
     ASSERT(present(geo))
     call write_xsf_geometry(iunit, geo, mesh)
 
-    write(iunit, '(a,i1,a)') 'BEGIN_BLOCK_DATAGRID', mesh%sb%dim, 'D'
+    write(iunit, '(a,i1,a)') 'BEGIN_BLOCK_DATAGRID_', mesh%sb%dim, 'D'
     write(iunit, '(4a)') 'units: coords = ', trim(units_abbrev(units_out%length)), &
                             ', function = ', trim(units_abbrev(unit))
-    write(iunit, '(a,i1,a)') 'DATAGRID_', mesh%sb%dim, 'D_function'
+    write(iunit, '(a,i1,a)') 'BEGIN_DATAGRID_', mesh%sb%dim, 'D_function'
     write(iunit, '(3i7)') my_n(1:mesh%sb%dim)
     write(iunit, '(a)') '0.0 0.0 0.0'
 
@@ -1251,8 +1251,8 @@ contains
       end do
     end do
 
-    write(iunit, '(a,i1,a)') 'END_DATAGRID', mesh%sb%dim, 'D'
-    write(iunit, '(a,i1,a)') 'END_BLOCK_DATAGRID', mesh%sb%dim, 'D'
+    write(iunit, '(a,i1,a)') 'END_DATAGRID_', mesh%sb%dim, 'D'
+    write(iunit, '(a,i1,a)') 'END_BLOCK_DATAGRID_', mesh%sb%dim, 'D'
 
     call io_close(iunit)
 
@@ -1312,13 +1312,17 @@ contains
 #ifdef R_TREAL
     maxff = maxval(ff)
     minff = minval(ff)
-    write(message(1),*) 'Minimum value = ', minff, ' Maximum value = ', maxff
+    write(message(1),*) 'Minimum value = ', units_from_atomic(unit, minff), &
+      ' Maximum value = ', units_from_atomic(unit, maxff), " ", trim(units_abbrev(unit))
 #else
     maxff = maxval(abs(ff))
     minff = minval(abs(ff))
-    write(message(1),*) 'Minimum magnitude = ', minff, ' Maximum magnitude = ', maxff
+    write(message(1),*) 'Minimum magnitude = ', units_from_atomic(unit, minff), &
+      ' Maximum magnitude = ', units_from_atomic(unit, maxff), " ", trim(units_abbrev(unit))
 #endif
     call messages_info(1)
+
+    ! note: this default makes no sense for real wfs. the complex version is better.
 
     !%Variable OpenSCADIsovalue
     !%Type float
@@ -1330,7 +1334,7 @@ contains
     !% for the magnitude of the field.
     !%End
     call parse_variable('OpenSCADIsovalue', (maxff + minff) / M_TWO, isosurface_value, unit)
-    write(message(1),*) 'OpenSCAD output at isovalue ', isosurface_value, " ", trim(units_abbrev(unit))
+    write(message(1),*) 'OpenSCAD output at isovalue ', units_from_atomic(unit, isosurface_value), " ", trim(units_abbrev(unit))
     call messages_info(1)
     
     SAFE_ALLOCATE(edges(0:255))
@@ -1505,11 +1509,11 @@ contains
         end do
       end do
       
-      call X(vtk_out_cf_structured)(filename, ierr, cf, cube, unit, points)     
+      call X(vtk_out_cf_structured)(filename, fname, ierr, cf, cube, unit, points)     
       SAFE_DEALLOCATE_A(points) 
     else  
       !Ordinary grid
-      call X(vtk_out_cf)(filename, ierr, cf, cube, dk(:), unit)
+      call X(vtk_out_cf)(filename, fname, ierr, cf, cube, dk(:), unit)
     end if  
 
     call X(cube_function_free_RS)(cube, cf)

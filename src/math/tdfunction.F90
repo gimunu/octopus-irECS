@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: tdfunction.F90 14220 2015-06-05 15:51:28Z xavier $
+!! $Id: tdfunction.F90 15203 2016-03-19 13:15:05Z xavier $
 
 #include "global.h"
 
@@ -24,20 +24,20 @@
 !! the lasers module, or in the future in order to define time-dependent
 !! magnetic fields.
 !!--------------------------------------------------------------
-module tdfunction_m
+module tdfunction_oct_m
   use iso_c_binding
-  use fft_m
-  use global_m
-  use io_m
-  use loct_math_m
-  use math_m
-  use messages_m
-  use mpi_m
-  use parser_m
-  use profiling_m
-  use splines_m
-  use unit_m
-  use unit_system_m
+  use fft_oct_m
+  use global_oct_m
+  use io_oct_m
+  use loct_math_oct_m
+  use math_oct_m
+  use messages_oct_m
+  use mpi_oct_m
+  use parser_oct_m
+  use profiling_oct_m
+  use splines_oct_m
+  use unit_oct_m
+  use unit_system_oct_m
 
   implicit none
 
@@ -193,11 +193,12 @@ contains
     !% real part and the imaginary part of the temporal function <i>f</i>(<i>t</i>).
     !%
     !%Option tdf_from_expr 10008
+    !%
     !% <tt>%TDFunctions
     !% <br>&nbsp;&nbsp; "function-name" | tdf_from_expr | "expression"
     !% <br>%</tt>
     !%
-    !% The temporal shape of the field is given as an expression (e.g., "cos(2.0*t)". The 
+    !% The temporal shape of the field is given as an expression (e.g., <tt>cos(2.0*t)</tt>. The 
     !% letter <i>t</i> means time, obviously. The expression is used to construct the function <i>f</i>
     !% that defines the field.
     !%End
@@ -1140,7 +1141,7 @@ contains
   end function tdf_diff
   !------------------------------------------------------------
 
-end module tdfunction_m
+end module tdfunction_oct_m
 
 !! Local Variables:
 !! mode: f90

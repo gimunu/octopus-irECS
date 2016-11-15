@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: command_line.F90 15009 2016-01-08 09:32:49Z umberto $
+!! $Id: command_line.F90 15203 2016-03-19 13:15:05Z xavier $
 
 #include "global.h"
 
@@ -34,7 +34,7 @@
 !! can be managed in this "standard" way.
 !
 ! ---------------------------------------------------------
-module command_line_m
+module command_line_oct_m
 
   !< ---------------------------------------------------------
   !! The compilation depends on several macros defined at configure time (the m4 code that
@@ -161,10 +161,9 @@ module command_line_m
       character(len=*), intent(inout) :: name
     end subroutine getopt_help
     
-    subroutine getopt_photoelectron_spectrum(interp, estep, espan, &
+    subroutine getopt_photoelectron_spectrum(estep, espan, &
       thstep, thspan, phstep, phspan, pol, center, pvec, integrate)
       implicit none
-      integer, intent(inout) :: interp
       real(8), intent(inout) :: estep
       real(8), intent(inout) :: espan(2)
       real(8), intent(inout) :: thstep
@@ -294,7 +293,7 @@ contains
 #endif
 
 
-end module command_line_m
+end module command_line_oct_m
 
 
 

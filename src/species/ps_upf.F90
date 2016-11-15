@@ -15,18 +15,18 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: ps_upf.F90 14164 2015-06-01 17:08:20Z dstrubbe $
+!! $Id: ps_upf.F90 15268 2016-04-11 03:53:53Z xavier $
 
 #include "global.h"
 
-module ps_upf_m
-  use atomic_m
-  use global_m
-  use io_m
-  use messages_m
-  use profiling_m
-  use ps_in_grid_m
-  use xml_m
+module ps_upf_oct_m
+  use atomic_oct_m
+  use global_oct_m
+  use io_oct_m
+  use messages_oct_m
+  use profiling_oct_m
+  use ps_in_grid_oct_m
+  use xml_oct_m
   
   implicit none
 
@@ -39,6 +39,7 @@ module ps_upf_m
   type ps_upf_t
     type(valconf_t)    :: conf
 
+    logical :: version2
     integer :: kb_nc
     integer :: l_local
     FLOAT :: local_radius
@@ -118,12 +119,14 @@ contains
     
     if(ierr == 0) then
       ! tag found, this is version 2
+      ps_upf%version2 = .true.
       call xml_tag_end(tag)
       call messages_experimental('UPF version 2')
       call ps_upf_file_read_version2(upf2_file, ps_upf)
       call xml_file_end(upf2_file)
     else
       ! not found, version 1
+      ps_upf%version2 = .false.
       call xml_file_end(upf2_file)
    
       iunit = io_open(trim(filename), action='read', form='formatted', status='old')
@@ -790,7 +793,7 @@ contains
     POP_SUB(ps_upf_check_rphi)
   end subroutine ps_upf_check_rphi
 
-end module ps_upf_m
+end module ps_upf_oct_m
 
 !! Local Variables:
 !! mode: f90

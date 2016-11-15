@@ -15,34 +15,34 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: mesh_init.F90 14931 2015-12-31 02:37:35Z xavier $
+!! $Id: mesh_init.F90 15684 2016-10-25 07:59:43Z nicolastd $
 
 #include "global.h"
 
-module mesh_init_m
-  use checksum_interface_m
-  use cube_m
-  use curvilinear_m
-  use geometry_m
-  use global_m
-  use hypercube_m
-  use index_m
-  use io_m
-  use loct_m
-  use math_m
-  use mesh_m
-  use mesh_cube_map_m
-  use mesh_partition_m
-  use messages_m
-  use mpi_m
-  use multicomm_m
-  use par_vec_m
-  use parser_m
-  use partition_m
-  use profiling_m
-  use simul_box_m
-  use stencil_m
-  use subarray_m
+module mesh_init_oct_m
+  use checksum_interface_oct_m
+  use cube_oct_m
+  use curvilinear_oct_m
+  use geometry_oct_m
+  use global_oct_m
+  use hypercube_oct_m
+  use index_oct_m
+  use io_oct_m
+  use loct_oct_m
+  use math_oct_m
+  use mesh_oct_m
+  use mesh_cube_map_oct_m
+  use mesh_partition_oct_m
+  use messages_oct_m
+  use mpi_oct_m
+  use multicomm_oct_m
+  use par_vec_oct_m
+  use parser_oct_m
+  use partition_oct_m
+  use profiling_oct_m
+  use simul_box_oct_m
+  use stencil_oct_m
+  use subarray_oct_m
 
   implicit none
   
@@ -445,7 +445,7 @@ subroutine mesh_init_stage_3(mesh, stencil, mpi_grp, parent)
   type(mpi_grp_t),           intent(in)    :: mpi_grp
   type(mesh_t),    optional, intent(in)    :: parent
 
-  integer :: ip
+  integer :: ip, iunit, ii
 
   PUSH_SUB(mesh_init_stage_3)
   call profiling_in(mesh_init_prof, "MESH_INIT")
@@ -488,6 +488,14 @@ subroutine mesh_init_stage_3(mesh, stencil, mpi_grp, parent)
   call mesh_cube_map_init(mesh%cube_map, mesh%idx, mesh%np_global)
 
   call mesh_get_vol_pp(mesh%sb)
+
+  if(debug%info) then
+    iunit = io_open('debug/mesh', action='write')
+    do ii = 1, mesh%np
+      write(iunit, '(i8,99f18.8)') ii, mesh_x_global(mesh, ii)
+    end do
+    call io_close(iunit)
+  end if
 
   call profiling_out(mesh_init_prof)
   POP_SUB(mesh_init_stage_3)
@@ -1064,7 +1072,6 @@ contains
 
     SAFE_ALLOCATE(mesh%vol_pp(1:np))
 
-! TODO: in non orthogonal cells this is missing a geometrical factor
     forall(ip = 1:np) mesh%vol_pp(ip) = product(mesh%spacing(1:sb%dim))
     jj(sb%dim + 1:MAX_DIM) = 0
 
@@ -1227,7 +1234,7 @@ contains
 
 end subroutine mesh_init_stage_3
 
-end module mesh_init_m
+end module mesh_init_oct_m
 
 !! Local Variables:
 !! mode: f90

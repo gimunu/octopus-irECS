@@ -15,62 +15,56 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: states_calc.F90 14791 2015-11-19 05:04:26Z xavier $
+!! $Id: states_calc.F90 15583 2016-08-15 13:45:41Z nicolastd $
 
 #include "global.h"
 
-module states_calc_m
-  use batch_m
-  use batch_ops_m
-  use blas_m
-  use blacs_m
-  use blacs_proc_grid_m
+module states_calc_oct_m
+  use accel_oct_m
+  use accel_blas_oct_m
+  use batch_oct_m
+  use batch_ops_oct_m
+  use blas_oct_m
+  use blacs_oct_m
+  use blacs_proc_grid_oct_m
   use iso_c_binding
-#ifdef HAVE_OPENCL
-  use cl
-#ifdef HAVE_CLAMDBLAS
-  use clAmdBlas
-#endif
-#endif
-  use cmplxscl_m
-  use comm_m
-  use derivatives_m
-  use geometry_m
-  use global_m
-  use grid_m
-  use hardware_m
-  use io_m
-  use kpoints_m
-  use lalg_adv_m
-  use lalg_basic_m
-  use lapack_m
-  use loct_m
-  use messages_m
-  use mesh_m
-  use mesh_batch_m
-  use mesh_function_m
-  use mpi_m
-  use mpi_lib_m
-  use multicomm_m
-  use octcl_kernel_m
-  use opencl_m
-  use parser_m
-  use pblas_m
-  use physics_op_m
-  use profiling_m
-  use restart_m
-  use sort_om
-  use scalapack_m
-  use simul_box_m
-  use smear_m
-  use states_m
-  use states_dim_m
-  use states_parallel_m
-  use unit_m
-  use unit_system_m
-  use utils_m
-  use types_m
-  use varinfo_m
+  use cmplxscl_oct_m
+  use comm_oct_m
+  use derivatives_oct_m
+  use geometry_oct_m
+  use global_oct_m
+  use grid_oct_m
+  use hardware_oct_m
+  use io_oct_m
+  use kpoints_oct_m
+  use lalg_adv_oct_m
+  use lalg_basic_oct_m
+  use lapack_oct_m
+  use loct_oct_m
+  use messages_oct_m
+  use mesh_oct_m
+  use mesh_batch_oct_m
+  use mesh_function_oct_m
+  use mpi_oct_m
+  use mpi_lib_oct_m
+  use multicomm_oct_m
+  use parser_oct_m
+  use pblas_oct_m
+  use physics_op_oct_m
+  use profiling_oct_m
+  use restart_oct_m
+  use sort_oct_m
+  use scalapack_oct_m
+  use simul_box_oct_m
+  use smear_oct_m
+  use states_oct_m
+  use states_dim_oct_m
+  use states_parallel_oct_m
+  use unit_oct_m
+  use unit_system_oct_m
+  use utils_oct_m
+  use types_oct_m
+  use varinfo_oct_m
 
   implicit none
 
@@ -100,7 +94,9 @@ module states_calc_m
     dstates_calc_overlap,           &
     zstates_calc_overlap,           &
     states_orthogonalize_cproduct,  &
-    states_sort_complex
+    states_sort_complex,            &
+    dstates_calc_projections,       &
+    zstates_calc_projections
 
   interface states_rotate
     module procedure dstates_rotate, zstates_rotate
@@ -313,8 +309,8 @@ contains
     !%Default 1e-5
     !%Section States
     !%Description
-    !% A state j with energy E_j will be considered degenerate with a state
-    !% with energy E_i, if  E_i - threshold < E_j < E_i + threshold.
+    !% States with energy <math>E_i</math> and <math>E_j</math> will be considered degenerate
+    !% if <math> \left| E_i - E_j \right| < </math><tt>DegeneracyThreshold</tt>.
     !%End
     call parse_variable('DegeneracyThreshold', units_from_atomic(units_inp%energy, CNST(1e-5)), degen_thres)
     degen_thres = units_to_atomic(units_inp%energy, degen_thres)
@@ -413,7 +409,7 @@ contains
 #include "states_calc_inc.F90"
 #include "undef.F90"
 
-end module states_calc_m
+end module states_calc_oct_m
 
 
 !! Local Variables:

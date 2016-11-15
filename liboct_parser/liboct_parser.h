@@ -16,7 +16,7 @@
  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
  02110-1301, USA.
 
- $Id: liboct_parser.h 14180 2015-06-02 02:01:12Z dstrubbe $
+ $Id: liboct_parser.h 15737 2016-11-14 04:36:01Z dstrubbe $
 */
 
 #ifndef _LIB_OCT_H
@@ -25,7 +25,8 @@
 #include <gsl/gsl_complex.h>
 
 int         parse_init   (const char *file_out, const int *mpiv_node);
-int         parse_input  (const char *file_in);
+int         parse_input  (const char *file_in, int set_used);
+void        parse_environment  (const char *file_in);
 void        parse_end    (void);
 
 int         parse_isdef  (const char *name);

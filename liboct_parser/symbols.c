@@ -16,7 +16,7 @@
  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
  02110-1301, USA.
 
- $Id: symbols.c 14262 2015-06-12 17:49:58Z dstrubbe $
+ $Id: symbols.c 15737 2016-11-14 04:36:01Z dstrubbe $
 */
 
 #include <stdio.h>
@@ -41,7 +41,18 @@ void str_tolower(char *in)
     *in = (char)tolower(*in);
 }
 
-symrec *putsym (const char *sym_name, symrec_type sym_type)
+void sym_mark_table_used ()
+{
+  symrec *ptr;
+
+  for (ptr = sym_table; ptr != (symrec *) 0;
+       ptr = (symrec *)ptr->next)
+  {
+    ptr->used = 1;
+  }
+}
+
+symrec *putsym (const char *sym_name, symrec_type sym_type)  
 {
   symrec *ptr;
   ptr = (symrec *)malloc(sizeof(symrec));
@@ -216,14 +227,6 @@ void sym_init_table ()  /* puts arithmetic functions in table. */
   }
 }
 
-void sym_clear_reserved()
-{
-  int i;
-  for (i = 0; reserved_symbols[i] != 0; i++){
-    rmsym(reserved_symbols[i]);
-  }
-}
-
 void sym_end_table()
 {
   symrec *ptr, *ptr2;
@@ -260,24 +263,42 @@ void sym_end_table()
   sym_table = NULL;
 }
 
-void sym_output_table(int only_unused)
+void sym_output_table(int only_unused, int mpiv_node)
 {
+  FILE *f;
   symrec *ptr;
+  int any_unused = 0;
+
+  if(mpiv_node != 0) {
+    return;
+  }
+  
+  if(only_unused) {
+    f = stderr;
+  } else {
+    f = stdout;
+  }
+  
   for(ptr = sym_table; ptr != NULL; ptr = ptr->next){
     if(only_unused && ptr->used == 1) continue;
-    printf("%s", ptr->name);
+    if(any_unused == 0) {
+      fprintf(f, "\nParser warning: possible mistakes in input file.\n");
+      fprintf(f, "List of variable assignments not used by parser:\n");
+      any_unused = 1;
+    }
+    fprintf(f, "%s", ptr->name);
     switch(ptr->type){
     case S_CMPLX:
-      printf(" = (%f,%f)\n", GSL_REAL(ptr->value.c), GSL_IMAG(ptr->value.c));
+      fprintf(f, " = (%f,%f)\n", GSL_REAL(ptr->value.c), GSL_IMAG(ptr->value.c));
       break;
     case S_STR:
-      printf(" = \"%s\"\n", ptr->value.str);
+      fprintf(f, " = \"%s\"\n", ptr->value.str);
       break;
     case S_BLOCK:
-      printf("%s\n", " <= BLOCK");
+      fprintf(f, "%s\n", " <= BLOCK");
       break;
     case S_FNCT:
-      printf("%s\n", " <= FUNCTION");
+      fprintf(f, "%s\n", " <= FUNCTION");
       break;
     }
   }

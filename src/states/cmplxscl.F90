@@ -15,16 +15,16 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: cmplxscl.F90 14362 2015-06-24 17:02:22Z xavier $
+!! $Id: cmplxscl.F90 15565 2016-08-03 17:49:40Z xavier $
 
 #include "global.h"
 
-module cmplxscl_m
-  use global_m
-  use opencl_m
-  use parser_m
-  use messages_m
-  use varinfo_m
+module cmplxscl_oct_m
+  use accel_oct_m
+  use global_oct_m
+  use parser_oct_m
+  use messages_oct_m
+  use varinfo_oct_m
 
   implicit none
   
@@ -97,10 +97,6 @@ contains
     this%space = iand(cmplxscl_flags, CMPLXSCL_SPACE) /= 0
     this%time  = iand(cmplxscl_flags, CMPLXSCL_TIME)  /= 0
 
-    if((this%space .or. this%time) .and. opencl_is_enabled()) &
-      call messages_not_implemented("ComplexScaling with OpenCL")
-    ! scaling of kinetic energy in src/hamiltonian/hamiltonian_inc.F90 seg-faults, for example
-    
     if(this%space) then
       !%Variable ComplexScalingTheta
       !%Type float 
@@ -270,7 +266,7 @@ contains
     
   end function cmplxscl_energy_ordering_score
 
-end module cmplxscl_m
+end module cmplxscl_oct_m
 
 !! Local Variables:
 !! mode: f90

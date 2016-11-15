@@ -1,5 +1,5 @@
 # -*- coding: utf-8 mode: shell-script -*-
-# $Id: 04-silicon.test 14402 2015-06-30 14:25:53Z irina $
+# $Id: 04-silicon.test 15658 2016-10-17 08:42:56Z nicolastd $
 
 Test       : Silicon crystal
 Program    : octopus
@@ -13,8 +13,8 @@ match ; Reduced k-points ; GREPFIELD(static/info, 'Number of symmetry-reduced k-
 match ; Space group        ; GREPFIELD(out, 'Space group', 4) ; 227
 match ; No. of symmetries  ; GREPFIELD(out, 'symmetries that can be used', 5)  ;  24
 
-match ; Total energy       ; GREPFIELD(static/info, 'Total       =', 3) ; -34.17266048
-match ; Ion-ion energy     ; GREPFIELD(static/info, 'Ion-ion     =', 3) ; -33.79951714
+match ; Total energy       ; GREPFIELD(static/info, 'Total       =', 3) ; -31.80434624
+match ; Ion-ion energy     ; GREPFIELD(static/info, 'Ion-ion     =', 3) ; -31.43120280
 match ; Eigenvalues sum    ; GREPFIELD(static/info, 'Eigenvalues =', 3) ; -1.12570318
 match ; Hartree energy     ; GREPFIELD(static/info, 'Hartree     =', 3) ; 2.17260804
 match ; Exchange energy    ; GREPFIELD(static/info, 'Exchange    =', 3) ; -8.12442661
@@ -52,15 +52,15 @@ match ; k-point 4 (z) ; GREPFIELD(static/info, '#k =   4', 9) ; 0.375000
 match ; Eigenvalue  1 ; GREPFIELD(static/info, '#k =   4', 3, 1) ; -0.224912
 match ; Eigenvalue  8 ; GREPFIELD(static/info, '#k =   4', 3, 8) ; -0.067345
 match ; Eigenvalue 16 ; GREPFIELD(static/info, '#k =   4', 3, 16) ; 0.109820
-match ; Eigenvalue 17 ; GREPFIELD(static/info, '#k =   4', 3, 17) ; 0.223391
+match ; Eigenvalue 17 ; GREPFIELD(static/info, '#k =   4', 3, 17) ; 0.214726
 
 match ; geometry size  ; LINEFIELD(static/geometry.xyz,  1, 1) ;  8
 match ; geometry  4 1  ; LINEFIELD(static/geometry.xyz,  6, 2) ;  0.0
-match ; geometry  4 3  ; LINEFIELD(static/geometry.xyz,  6, 3) ; -5.1
-match ; geometry  4 4  ; LINEFIELD(static/geometry.xyz,  6, 4) ; -5.1
-match ; geometry  8 1  ; LINEFIELD(static/geometry.xyz, 10, 2) ;  2.55
-match ; geometry  8 2  ; LINEFIELD(static/geometry.xyz, 10, 3) ; -2.55
-match ; geometry  8 3  ; LINEFIELD(static/geometry.xyz, 10, 4) ; -2.55
+match ; geometry  4 3  ; LINEFIELD(static/geometry.xyz,  6, 3) ; -2.698804
+match ; geometry  4 4  ; LINEFIELD(static/geometry.xyz,  6, 4) ; -2.698804
+match ; geometry  8 1  ; LINEFIELD(static/geometry.xyz, 10, 2) ;  1.349402
+match ; geometry  8 2  ; LINEFIELD(static/geometry.xyz, 10, 3) ; -1.349402
+match ; geometry  8 3  ; LINEFIELD(static/geometry.xyz, 10, 4) ; -1.349402
 
 match ; crystal  size  ; LINEFIELD(static/crystal.xyz,  1, 1) ;  95
 match ; crystal  14 1  ; LINEFIELD(static/crystal.xyz, 16, 2) ;  0.0
@@ -71,10 +71,10 @@ match ; crystal  70 2  ; LINEFIELD(static/crystal.xyz, 72, 3) ; -7.65
 match ; crystal  70 3  ; LINEFIELD(static/crystal.xyz, 72, 4) ;  2.55
 
 match ; DOS E Fermi    ; LINEFIELD(static/total-dos-efermi.dat, 2, 1);   0.139406
-match ; DOS energy 2   ; LINEFIELD(static/total-dos.dat,   2, 1);       -0.406396
-match ; DOS value  2   ; LINEFIELD(static/total-dos.dat,   2, 2);        0.463290
-match ; DOS energy 442 ; LINEFIELD(static/total-dos.dat, 442, 1);        0.259992
-match ; DOS value  442 ; LINEFIELD(static/total-dos.dat, 442, 2);        1.542773
+match ; DOS energy 2   ; LINEFIELD(static/total-dos.dat,   2, 1);       -0.404230
+match ; DOS value  2   ; LINEFIELD(static/total-dos.dat,   2, 2);        0.472034
+match ; DOS energy 442 ; LINEFIELD(static/total-dos.dat, 442, 1);        0.250698
+match ; DOS value  442 ; LINEFIELD(static/total-dos.dat, 442, 2);        1.858955
 
 Input      : 04-silicon.02-kdotp.inp
 

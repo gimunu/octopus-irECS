@@ -15,15 +15,15 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: sort.F90 14824 2015-11-26 07:21:58Z xavier $
+!! $Id: sort.F90 15232 2016-03-23 20:55:25Z xavier $
 
 #include "global.h"
 
 !> This module is intended to contain "only mathematical" functions
 !! and procedures.
-module sort_om
-  use global_m
-  use messages_m
+module sort_oct_m
+  use global_oct_m
+  use messages_oct_m
 
   implicit none
 
@@ -55,7 +55,7 @@ module sort_om
   !!     ! must have the same size as a.
   !!   end subroutine sort
   interface sort
-    module procedure shellsort, ishellsort
+    module procedure dsort, isort
     module procedure dshellsort1, zshellsort1, ishellsort1
     module procedure dshellsort2, zshellsort2, ishellsort2
     module procedure sort_complex
@@ -68,109 +68,46 @@ module sort_om
 contains
 
   ! ---------------------------------------------------------
-  subroutine shellsort(a, ind)
+  subroutine dsort(a, ind)
     FLOAT,             intent(inout) :: a(:)
     integer, optional, intent(out)   :: ind(:)
 
-    integer :: i,j,inc,n, indi, indj
-    FLOAT   :: v
+    PUSH_SUB(dsort)
 
-    PUSH_SUB(shellsort)
+    if(size(a) > 0) then
+      
+      if(.not. present(ind)) then
+        call dsort1(size(a), a(1))
+      else
+        call dsort2(size(a), a(1), ind(1))
+      end if
 
-    n = size(a)
-
-    if(present(ind)) then
-      do i = 1, n
-        ind(i) = i
-      end do
     end if
 
-    inc = 1
-    do
-      inc=3*inc+1
-      if (inc > n) exit
-    end do
-
-    do
-      inc=inc/3
-      do i=inc+1,n
-        v=a(i)
-        if(present(ind)) indi = ind(i)
-        j=i
-        do
-          if (a(j-inc) <= v) exit
-          !if (a(j-inc) >= v) exit
-          a(j)=a(j-inc)
-
-          !workaround to a bug in itanium ifort
-          !if(present(ind)) ind(j) = ind(j-inc)
-          if(present(ind)) indj = ind(j-inc)
-          if(present(ind)) ind(j) = indj
-
-          j=j-inc
-          if (j <= inc) exit
-        end do
-        a(j)=v
-        if(present(ind)) ind(j) = indi
-      end do
-      if (inc <= 1) exit
-    end do
-
-    POP_SUB(shellsort)
-  end subroutine shellsort
+    POP_SUB(dsort)
+  end subroutine dsort
 
 
   ! ---------------------------------------------------------
   !> Shell sort for integer arrays.
-  subroutine ishellsort(a, ind)
+  subroutine isort(a, ind)
     integer,           intent(inout) :: a(:)
     integer, optional, intent(out)   :: ind(:)
 
-    integer :: i,j,inc,n, indi, indj
-    integer :: v
+    PUSH_SUB(isort)
 
-    PUSH_SUB(ishellsort)
-
-    n = size(a)
-
-    if(present(ind)) then
-      do i = 1, n
-        ind(i) = i
-      end do
+    if(size(a) > 0) then
+      
+      if(.not. present(ind)) then
+        call isort1(size(a), a(1))
+      else
+        call isort2(size(a), a(1), ind(1))
+      end if
+      
     end if
 
-    inc = 1
-    do
-      inc=3*inc+1
-      if (inc > n) exit
-    end do
-
-    do
-      inc=inc/3
-      do i=inc+1,n
-        v=a(i)
-        if(present(ind)) indi = ind(i)
-        j=i
-        do
-          if (a(j-inc) <= v) exit
-          !if (a(j-inc) >= v) exit
-          a(j)=a(j-inc)
-          !workaround to a bug in itanium ifort
-          !if(present(ind)) ind(j) = ind(j-inc)
-          if(present(ind)) indj = ind(j-inc)
-          if(present(ind)) ind(j) = indj
-
-          j=j-inc
-          if (j <= inc) exit
-        end do
-        a(j)=v
-        if(present(ind)) ind(j) = indi
-      end do
-      if (inc <= 1) exit
-    end do
-
-    POP_SUB(ishellsort)
-  end subroutine ishellsort
+    POP_SUB(isort)
+  end subroutine isort
 
 
   ! ---------------------------------------------------------
@@ -272,7 +209,7 @@ contains
 #include "integer.F90"
 #include "sort_inc.F90"
 
-end module sort_om
+end module sort_oct_m
 
 !! Local Variables:
 !! mode: f90

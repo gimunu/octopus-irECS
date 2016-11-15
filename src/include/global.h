@@ -15,11 +15,12 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: global.h 14974 2016-01-05 05:48:47Z xavier $
+!! $Id: global.h 15058 2016-01-14 16:50:31Z xavier $
 
 #include "config_F90.h"
 #include "options.h"  
-
+#include "defaults.h"
+  
 ! If the compiler accepts long Fortran lines, it is better to use that
 ! capacity, and build all the preprocessor definitions in one line. In
 ! this way, the debuggers will provide the right line numbers.

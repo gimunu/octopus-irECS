@@ -15,37 +15,33 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: nl_operator.F90 14976 2016-01-05 14:27:54Z xavier $
+!! $Id: nl_operator.F90 15676 2016-10-24 13:45:59Z nicolastd $
 
 #include "global.h"
 
-module nl_operator_m
-  use batch_m
-  use boundaries_m
-#ifdef HAVE_OPENCL
-  use cl
-#endif
+module nl_operator_oct_m
+  use accel_oct_m
+  use batch_oct_m
+  use boundaries_oct_m
   use iso_c_binding
-  use global_m
-  use io_m
-  use loct_pointer_m
-  use math_m
-  use index_m
-  use mesh_m
-  use messages_m
-  use multicomm_m
-  use mpi_m
-  use octcl_kernel_m
-  use opencl_m
-  use operate_f_m
-  use par_vec_m
-  use parser_m
-  use partition_m
-  use profiling_m
-  use simul_box_m
-  use stencil_m
-  use types_m
-  use varinfo_m
+  use global_oct_m
+  use io_oct_m
+  use loct_pointer_oct_m
+  use math_oct_m
+  use index_oct_m
+  use mesh_oct_m
+  use messages_oct_m
+  use multicomm_oct_m
+  use mpi_oct_m
+  use operate_f_oct_m
+  use par_vec_oct_m
+  use parser_oct_m
+  use partition_oct_m
+  use profiling_oct_m
+  use simul_box_oct_m
+  use stencil_oct_m
+  use types_oct_m
+  use varinfo_oct_m
 
   implicit none
 
@@ -114,17 +110,17 @@ module nl_operator_m
     type(nl_operator_index_t) :: inner
     type(nl_operator_index_t) :: outer
 
-    type(octcl_kernel_t) :: kernel
-    type(opencl_mem_t) :: buff_imin
-    type(opencl_mem_t) :: buff_imax
-    type(opencl_mem_t) :: buff_ri
-    type(opencl_mem_t) :: buff_map
-    type(opencl_mem_t) :: buff_all
-    type(opencl_mem_t) :: buff_inner
-    type(opencl_mem_t) :: buff_outer
-    type(opencl_mem_t) :: buff_stencil
-    type(opencl_mem_t) :: buff_ip_to_xyz
-    type(opencl_mem_t) :: buff_xyz_to_ip
+    type(accel_kernel_t) :: kernel
+    type(accel_mem_t) :: buff_imin
+    type(accel_mem_t) :: buff_imax
+    type(accel_mem_t) :: buff_ri
+    type(accel_mem_t) :: buff_map
+    type(accel_mem_t) :: buff_all
+    type(accel_mem_t) :: buff_inner
+    type(accel_mem_t) :: buff_outer
+    type(accel_mem_t) :: buff_stencil
+    type(accel_mem_t) :: buff_ip_to_xyz
+    type(accel_mem_t) :: buff_xyz_to_ip
   end type nl_operator_t
 
   integer, parameter :: &
@@ -237,7 +233,7 @@ contains
     call parse_variable('OperateComplexSingle', OP_FORTRAN, cfunction_global)
     if(.not.varinfo_valid_option('OperateComplexSingle', cfunction_global)) call messages_input_error('OperateComplexSingle')
 
-    if(opencl_is_enabled()) then
+    if(accel_is_enabled()) then
 
       !%Variable OperateOpenCL
       !%Type integer
@@ -377,9 +373,7 @@ contains
     integer :: ir, maxp, iinner, iouter
     logical :: change, force_change
     character(len=200) :: flags
-#ifdef HAVE_OPENCL
     integer, allocatable :: inner_points(:), outer_points(:), all_points(:)    
-#endif
     
     PUSH_SUB(nl_operator_build)
 
@@ -601,8 +595,7 @@ contains
       
     end if
 
-#ifdef HAVE_OPENCL
-    if(opencl_is_enabled() .and. op%const_w) then
+    if(accel_is_enabled() .and. op%const_w) then
 
       write(flags, '(i5)') op%stencil%size
       flags='-DNDIM=3 -DSTENCIL_SIZE='//trim(adjustl(flags))
@@ -611,27 +604,27 @@ contains
       
       select case(function_opencl)
       case(OP_INVMAP)
-        call octcl_kernel_build(op%kernel, 'operate.cl', 'operate', flags)
+        call accel_kernel_build(op%kernel, 'operate.cl', 'operate', flags)
       case(OP_MAP)
-        call octcl_kernel_build(op%kernel, 'operate.cl', 'operate_map', flags)
+        call accel_kernel_build(op%kernel, 'operate.cl', 'operate_map', flags)
       case(OP_NOMAP)
-        call octcl_kernel_build(op%kernel, 'operate.cl', 'operate_nomap', flags)
+        call accel_kernel_build(op%kernel, 'operate.cl', 'operate_nomap', flags)
       end select
 
-      call opencl_create_buffer(op%buff_ri, CL_MEM_READ_ONLY, TYPE_INTEGER, op%nri*op%stencil%size)
-      call opencl_write_buffer(op%buff_ri, op%nri*op%stencil%size, op%ri)
+      call accel_create_buffer(op%buff_ri, ACCEL_MEM_READ_ONLY, TYPE_INTEGER, op%nri*op%stencil%size)
+      call accel_write_buffer(op%buff_ri, op%nri*op%stencil%size, op%ri)
 
       select case(function_opencl)
       case(OP_INVMAP)
-        call opencl_create_buffer(op%buff_imin, CL_MEM_READ_ONLY, TYPE_INTEGER, op%nri)
-        call opencl_write_buffer(op%buff_imin, op%nri, op%rimap_inv(1:))
-        call opencl_create_buffer(op%buff_imax, CL_MEM_READ_ONLY, TYPE_INTEGER, op%nri)
-        call opencl_write_buffer(op%buff_imax, op%nri, op%rimap_inv(2:))
+        call accel_create_buffer(op%buff_imin, ACCEL_MEM_READ_ONLY, TYPE_INTEGER, op%nri)
+        call accel_write_buffer(op%buff_imin, op%nri, op%rimap_inv(1:))
+        call accel_create_buffer(op%buff_imax, ACCEL_MEM_READ_ONLY, TYPE_INTEGER, op%nri)
+        call accel_write_buffer(op%buff_imax, op%nri, op%rimap_inv(2:))
 
       case(OP_MAP)
 
-        call opencl_create_buffer(op%buff_map, CL_MEM_READ_ONLY, TYPE_INTEGER, pad(op%mesh%np, opencl_max_workgroup_size()))
-        call opencl_write_buffer(op%buff_map, op%mesh%np, (op%rimap - 1)*op%stencil%size)
+        call accel_create_buffer(op%buff_map, ACCEL_MEM_READ_ONLY, TYPE_INTEGER, pad(op%mesh%np, accel_max_workgroup_size()))
+        call accel_write_buffer(op%buff_map, op%mesh%np, (op%rimap - 1)*op%stencil%size)
 
         if(op%mesh%parallel_in_domains) then
           
@@ -654,14 +647,14 @@ contains
             end if
           end do
           
-          call opencl_create_buffer(op%buff_all, CL_MEM_READ_ONLY, TYPE_INTEGER, pad(op%mesh%np, opencl_max_workgroup_size()))
-          call opencl_write_buffer(op%buff_all, op%mesh%np, all_points)
+          call accel_create_buffer(op%buff_all, ACCEL_MEM_READ_ONLY, TYPE_INTEGER, pad(op%mesh%np, accel_max_workgroup_size()))
+          call accel_write_buffer(op%buff_all, op%mesh%np, all_points)
         
-          call opencl_create_buffer(op%buff_inner, CL_MEM_READ_ONLY, TYPE_INTEGER, pad(op%ninner, opencl_max_workgroup_size()))
-          call opencl_write_buffer(op%buff_inner, op%ninner, inner_points)
+          call accel_create_buffer(op%buff_inner, ACCEL_MEM_READ_ONLY, TYPE_INTEGER, pad(op%ninner, accel_max_workgroup_size()))
+          call accel_write_buffer(op%buff_inner, op%ninner, inner_points)
           
-          call opencl_create_buffer(op%buff_outer, CL_MEM_READ_ONLY, TYPE_INTEGER, pad(op%nouter, opencl_max_workgroup_size()))
-          call opencl_write_buffer(op%buff_outer, op%nouter, outer_points)
+          call accel_create_buffer(op%buff_outer, ACCEL_MEM_READ_ONLY, TYPE_INTEGER, pad(op%nouter, accel_max_workgroup_size()))
+          call accel_write_buffer(op%buff_outer, op%nouter, outer_points)
 
         end if
         
@@ -673,8 +666,8 @@ contains
         ASSERT(op%mesh%sb%dim == 3)
         ASSERT(.not. op%mesh%parallel_in_domains)
 
-        call opencl_create_buffer(op%buff_map, CL_MEM_READ_ONLY, TYPE_INTEGER, pad(op%mesh%np, opencl_max_workgroup_size()))
-        call opencl_write_buffer(op%buff_map, op%mesh%np, (op%rimap - 1)*op%stencil%size)
+        call accel_create_buffer(op%buff_map, ACCEL_MEM_READ_ONLY, TYPE_INTEGER, pad(op%mesh%np, accel_max_workgroup_size()))
+        call accel_write_buffer(op%buff_map, op%mesh%np, (op%rimap - 1)*op%stencil%size)
         
         SAFE_ALLOCATE(stencil(1:op%mesh%sb%dim, 1:op%stencil%size + 1))
 
@@ -684,15 +677,15 @@ contains
         stencil(2, op%stencil%size + 1) = mesh%idx%nr(2, 1) - mesh%idx%nr(1, 1) + 1
         stencil(3, op%stencil%size + 1) = stencil(2, op%stencil%size + 1)*(mesh%idx%nr(2, 2) - mesh%idx%nr(1, 2) + 1)
 
-        call opencl_create_buffer(op%buff_stencil, CL_MEM_READ_ONLY, TYPE_INTEGER, op%mesh%sb%dim*(op%stencil%size + 1))
-        call opencl_write_buffer(op%buff_stencil, op%mesh%sb%dim*(op%stencil%size + 1), stencil)
+        call accel_create_buffer(op%buff_stencil, ACCEL_MEM_READ_ONLY, TYPE_INTEGER, op%mesh%sb%dim*(op%stencil%size + 1))
+        call accel_write_buffer(op%buff_stencil, op%mesh%sb%dim*(op%stencil%size + 1), stencil)
         
         SAFE_DEALLOCATE_A(stencil)
 
         size = product(mesh%idx%nr(2, 1:op%mesh%sb%dim) - mesh%idx%nr(1, 1:op%mesh%sb%dim) + 1)
 
-        call opencl_create_buffer(op%buff_xyz_to_ip, CL_MEM_READ_ONLY, TYPE_INTEGER, size)
-        call opencl_write_buffer(op%buff_xyz_to_ip, size, op%mesh%idx%lxyz_inv - 1)
+        call accel_create_buffer(op%buff_xyz_to_ip, ACCEL_MEM_READ_ONLY, TYPE_INTEGER, size)
+        call accel_write_buffer(op%buff_xyz_to_ip, size, op%mesh%idx%lxyz_inv - 1)
 
         SAFE_ALLOCATE(stencil(1:op%mesh%sb%dim, 1:mesh%np_part))
 
@@ -702,14 +695,13 @@ contains
 
         ASSERT(minval(stencil) == 0)
 
-        call opencl_create_buffer(op%buff_ip_to_xyz, CL_MEM_READ_ONLY, TYPE_INTEGER, op%mesh%np_part*op%mesh%sb%dim)
-        call opencl_write_buffer(op%buff_ip_to_xyz, op%mesh%np_part*op%mesh%sb%dim, stencil)
+        call accel_create_buffer(op%buff_ip_to_xyz, ACCEL_MEM_READ_ONLY, TYPE_INTEGER, op%mesh%np_part*op%mesh%sb%dim)
+        call accel_write_buffer(op%buff_ip_to_xyz, op%mesh%np_part*op%mesh%sb%dim, stencil)
 
         SAFE_DEALLOCATE_A(stencil)
 
       end select
     end if
-#endif
 
     POP_SUB(nl_operator_build)
 
@@ -957,14 +949,6 @@ contains
     ! op%w_im.
     call nl_operator_common_copy(op, opg)
 
-    ! Gather op%index and -- if necessary -- op%w_re and op%w_im.
-    ! Collect for every point in the stencil in a single step.
-    ! This permits to use ivec_gather.
-    do ip = 1, op%stencil%size
-      call vec_allgather(op%mesh%vp, opg%index(ip, :), op%index(ip, :))
-    end do
-    call nl_operator_translate_indices(opg)
-
     ! Weights have to be collected only if they are not constant.
     if(.not.op%const_w) then
       do ip = 1, op%stencil%size
@@ -998,7 +982,6 @@ contains
 
     call stencil_copy(op%stencil, opg%stencil)
 
-    SAFE_ALLOCATE(opg%index(1:op%stencil%size, 1:op%mesh%np_global))
     if(op%const_w) then
       SAFE_ALLOCATE(opg%w_re(1:op%stencil%size, 1:1))
       if(op%cmplx_op) then
@@ -1026,75 +1009,6 @@ contains
 
   end subroutine nl_operator_common_copy
 
-
-  ! ---------------------------------------------------------
-  !> Translates indices in i from local point numbers to
-  !! global point numbers after gathering them.
-  subroutine nl_operator_translate_indices(opg)
-    type(nl_operator_t), intent(inout) :: opg
-
-    integer              :: ip, jp, il, ig, np_enl
-    integer, allocatable :: np_ghost_tmp(:), xbndry_tmp(:), xghost_tmp(:), part_vec(:), ip_v(:)
-    
-    PUSH_SUB(nl_operator_translate_indices)
-
-    ASSERT(associated(opg%index))
-
-    SAFE_ALLOCATE(np_ghost_tmp(1:opg%mesh%vp%npart))
-    call MPI_Allgather(opg%mesh%vp%np_ghost, 1, MPI_INTEGER, &
-         np_ghost_tmp(1), 1, MPI_INTEGER, &
-         opg%mesh%vp%comm, mpi_err)
-
-    SAFE_ALLOCATE(xbndry_tmp(1:opg%mesh%vp%npart))
-    call MPI_Allgather(opg%mesh%vp%xbndry, 1, MPI_INTEGER, &
-         xbndry_tmp(1), 1, MPI_INTEGER, &
-         opg%mesh%vp%comm, mpi_err)
-
-    SAFE_ALLOCATE(xghost_tmp(1:opg%mesh%vp%npart))
-    call MPI_Allgather(opg%mesh%vp%xghost, 1, MPI_INTEGER, &
-         xghost_tmp(1), 1, MPI_INTEGER, &
-         opg%mesh%vp%comm, mpi_err)
-    SAFE_ALLOCATE(part_vec(1:opg%mesh%np_part_global))
-    SAFE_ALLOCATE(ip_v(1:opg%mesh%np_part_global))
-    do ip = 1, opg%mesh%np_part_global 
-      ip_v(ip) = ip 
-    end do
-    np_enl = opg%mesh%np_part_global - opg%mesh%np_global
-    call partition_get_partition_number(opg%mesh%inner_partition, opg%mesh%np_global, ip_v, part_vec) 
-    call partition_get_partition_number(opg%mesh%bndry_partition, np_enl , &
-         ip_v(opg%mesh%np_global+1:np_enl), part_vec(opg%mesh%np_global+1:np_enl)) 
-        
-    do ip = 1, opg%stencil%size
-      do jp = 1, opg%mesh%np_global
-        il = opg%mesh%vp%np_local_vec(part_vec(jp))
-        ig = il + np_ghost_tmp(part_vec(jp))
-        ! opg%index(ip, jp) is a local point number, i.e. it can be
-        ! a real local point (i.e. the local point number
-        ! is less or equal than the number of local points of
-        ! the node which owns the point with global number jp):
-        if(opg%index(ip, jp) <= il) then
-          ! Write the global point number from the lookup
-          ! table in op_(ip, jp).
-          opg%index(ip, jp) = opg%mesh%vp%local(opg%mesh%vp%xlocal_vec(part_vec(jp)) &
-            + opg%index(ip, jp)-1)
-          ! Or a ghost point:
-        else if(opg%index(ip, jp) > il .and. opg%index(ip, jp) <= ig) then
-          opg%index(ip, jp) = opg%mesh%vp%ghost(xghost_tmp(part_vec(jp)) &
-            + opg%index(ip, jp)-1-il)
-          ! Or a boundary point:
-        else if(opg%index(ip, jp) > ig) then
-          opg%index(ip, jp) = opg%mesh%vp%bndry(xbndry_tmp(part_vec(jp)) &
-            + opg%index(ip, jp)-1-ig)
-        end if
-      end do
-    end do
-    SAFE_DEALLOCATE_A(np_ghost_tmp)
-    SAFE_DEALLOCATE_A(xbndry_tmp)
-    SAFE_DEALLOCATE_A(xghost_tmp)
-
-    POP_SUB(nl_operator_translate_indices)
-
-  end subroutine nl_operator_translate_indices
 
   ! ---------------------------------------------------------
   ! End of private routines.
@@ -1135,31 +1049,29 @@ contains
 
     PUSH_SUB(nl_operator_end)
 
-#ifdef HAVE_OPENCL
-    if(opencl_is_enabled() .and. op%const_w) then
+    if(accel_is_enabled() .and. op%const_w) then
 
-      call opencl_release_buffer(op%buff_ri)
+      call accel_release_buffer(op%buff_ri)
       select case(function_opencl)
       case(OP_INVMAP)
-        call opencl_release_buffer(op%buff_imin)
-        call opencl_release_buffer(op%buff_imax)
+        call accel_release_buffer(op%buff_imin)
+        call accel_release_buffer(op%buff_imax)
 
       case(OP_MAP)
-        call opencl_release_buffer(op%buff_map)
+        call accel_release_buffer(op%buff_map)
         if(op%mesh%parallel_in_domains) then
-          call opencl_release_buffer(op%buff_all)
-          call opencl_release_buffer(op%buff_inner)
-          call opencl_release_buffer(op%buff_outer)
+          call accel_release_buffer(op%buff_all)
+          call accel_release_buffer(op%buff_inner)
+          call accel_release_buffer(op%buff_outer)
         end if
 
       case(OP_NOMAP)
-        call opencl_release_buffer(op%buff_map)
-        call opencl_release_buffer(op%buff_stencil)
-        call opencl_release_buffer(op%buff_xyz_to_ip)
-        call opencl_release_buffer(op%buff_ip_to_xyz)
+        call accel_release_buffer(op%buff_map)
+        call accel_release_buffer(op%buff_stencil)
+        call accel_release_buffer(op%buff_xyz_to_ip)
+        call accel_release_buffer(op%buff_ip_to_xyz)
       end select
     end if
-#endif
 
     if(op%mesh%parallel_in_domains) then
       SAFE_DEALLOCATE_P(op%inner%imin)
@@ -1234,7 +1146,7 @@ contains
 #include "complex_single.F90"
 #include "nl_operator_inc.F90"  
 
-end module nl_operator_m
+end module nl_operator_oct_m
 
 !! Local Variables:
 !! mode: f90

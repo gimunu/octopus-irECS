@@ -15,39 +15,39 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: convert.F90 14958 2016-01-03 16:22:04Z xavier $
+!! $Id: convert.F90 15229 2016-03-23 18:08:51Z jjornet $
 
 !> This utility runs in parallel and can be used for post-processing of the results of Output.
 
 #include "global.h"
 
 program oct_convert
-  use batch_m
-  use calc_mode_par_m
-  use command_line_m
-  use fft_m
-  use fftw_params_m
-  use geometry_m
-  use global_m
-  use io_m
-  use io_function_m
-  use io_binary_m
-  use kick_m
-  use loct_m
-  use messages_m
-  use mesh_m
-  use mpi_m
-  use output_m
-  use parser_m
-  use poisson_m
-  use profiling_m
-  use spectrum_m
-  use string_m
-  use system_m
-  use restart_m
-  use unit_m
-  use unit_system_m
-  use utils_m
+  use batch_oct_m
+  use calc_mode_par_oct_m
+  use command_line_oct_m
+  use fft_oct_m
+  use fftw_params_oct_m
+  use geometry_oct_m
+  use global_oct_m
+  use io_oct_m
+  use io_function_oct_m
+  use io_binary_oct_m
+  use kick_oct_m
+  use loct_oct_m
+  use messages_oct_m
+  use mesh_oct_m
+  use mpi_oct_m
+  use output_oct_m
+  use parser_oct_m
+  use poisson_oct_m
+  use profiling_oct_m
+  use spectrum_oct_m
+  use string_oct_m
+  use system_oct_m
+  use restart_oct_m
+  use unit_oct_m
+  use unit_system_oct_m
+  use utils_oct_m
 
   implicit none
 
@@ -401,10 +401,11 @@ contains
     character(len=*), intent(inout) :: ref_name       !< Reference file name 
     character(len=*), intent(inout) :: ref_folder     !< Reference folder name
 
-    integer                 :: ierr, ii, i_space, i_time, nn(1:3), optimize_parity(1:3)
-    integer                 :: i_energy, e_end, e_start, e_point, chunk_size, read_count
+    integer                 :: ierr, ii, i_space, i_time, nn(1:3), optimize_parity(1:3), wd_info
+    integer                 :: i_energy, e_end, e_start, e_point, chunk_size, read_count, t_point
     logical                 :: optimize(1:3)
-    character(MAX_PATH_LEN) :: filename, folder
+    integer                 :: folder_index
+    character(MAX_PATH_LEN) :: filename, folder, restart_folder
     FLOAT                   :: fdefault, w_max
     FLOAT, allocatable      :: read_ft(:), read_rff(:), point_tmp(:,:)
 
@@ -438,14 +439,9 @@ contains
       call messages_info(2)
     end if
 
-    e_point = (c_end - c_start) / c_step + 1
-    nn(1) = e_point
-    nn(2) = 1
-    nn(3) = 1
-    start_time = M_ZERO
-    !TODO: check if e_point can be used instead of e_point+1
-    SAFE_ALLOCATE(read_ft(1:e_point+1))
-    SAFE_ALLOCATE(read_rff(1:mesh%np))
+    call io_mkdir('wd.general')
+    wd_info = io_open(file='wd.general/wd.info', action='write')
+    call messages_print_stress(wd_info, "Fourier Transform Options")
 
     !%Variable ConvertEnergyMin
     !%Type float
@@ -455,23 +451,34 @@ contains
     !% Minimum energy to output from Fourier transform.
     !%End
     call parse_variable('ConvertEnergyMin', M_ZERO, min_energy, units_inp%energy)
+    call messages_print_var_value(wd_info, 'ConvertEnergyMin', min_energy, unit = units_out%energy)
 
     !%Variable ConvertReadSize
     !%Type integer
-    !%Default 1
+    !%Default mesh%np
     !%Section Utilities::oct-convert
     !%Description
     !% How many points are read at once. For the parallel run this has not been
     !% yet tested, so it should be one. For the serial run, a number
     !% of 100-1000 will speed-up the execution time by this factor.
     !%End
-    call parse_variable('ConvertReadSize', 1, chunk_size)
+    call parse_variable('ConvertReadSize', mesh%np, chunk_size)
+    call messages_print_var_value(wd_info, 'ConvertReadSize', chunk_size)
+    !Check that default value is set when ConvertReadSize = 0
+    if ( chunk_size == 0) chunk_size = mesh%np
+    ! Parallel version just work in domains and chunk_size equal to mesh%np 
+    if(mesh%mpi_grp%size > 1 .and. chunk_size /= mesh%np) then
+      write(message(1),*)'Incompatible value for ConvertReadSize and Parallelizaion in Domains'
+      write(message(2),*)'Use the default value for ConvertReadSize (or set it to 0)'
+      call messages_fatal(2)
+    end if
     
     ! Calculate the limits in frequency space.
     start_time = c_start * dt
-    dt = dt * c_step
+    dt         = dt * c_step
     time_steps = (c_end - c_start) / c_step 
-    w_max = M_TWO * M_PI / dt 
+    dw         = M_TWO * M_PI / (dt * time_steps)
+    w_max      = M_TWO * M_PI / dt 
 
     !%Variable ConvertEnergyMax
     !%Type float
@@ -491,6 +498,7 @@ contains
       call messages_info(3)
       max_energy = w_max
     end if
+    call messages_print_var_value(wd_info, 'ConvertEnergyMax', max_energy, unit = units_out%energy)
 
     !%Variable ConvertFTMethod
     !%Type integer
@@ -506,12 +514,19 @@ contains
     !% a time-propagation calculation. 
     !%End
     call parse_variable('ConvertFTMethod', 1, ft_method)
+    call messages_print_var_option(wd_info, 'ConvertFTMethod', ft_method)
 
-    dw = M_TWO * M_PI / (dt * time_steps)
+    !TODO: check if e_point can be used instead of e_point+1
+    SAFE_ALLOCATE(read_ft(0:time_steps))
+    read_ft = M_ZERO
+    SAFE_ALLOCATE(read_rff(1:mesh%np))
 
     select case(ft_method)
       case (FAST_FOURIER)
-        SAFE_ALLOCATE(out_fft(1:e_point+1))
+        nn(1) = time_steps + 1
+        nn(2) = 1
+        nn(3) = 1
+        SAFE_ALLOCATE(out_fft(0:time_steps))
         optimize = .false.
         optimize_parity = -1
         call fft_init(fft, nn, 1, FFT_REAL, FFTLIB_FFTW, optimize, optimize_parity)
@@ -534,17 +549,18 @@ contains
         spectrum%start_time = c_start * dt
         spectrum%end_time = c_end * dt 
         spectrum%energy_step =  dw
-        spectrum%max_energy = w_max
-        SAFE_ALLOCATE(tdrho_a(1:e_point + 1, 1, 1))
-        SAFE_ALLOCATE(wdrho_a(1:e_point + 1, 1, 1))
+        spectrum%max_energy = max_energy
+        SAFE_ALLOCATE(tdrho_a(0:time_steps, 1, 1))
+        SAFE_ALLOCATE(wdrho_a(0:time_steps, 1, 1))
     end select
+    call messages_print_var_value(wd_info, 'ConvertEnergyStep', dw, unit = units_out%energy)
 
     !TODO: set system variable common for all the program in 
     !      order to use call kick_init(kick, sy%st%d%nspin, sys%space%dim, sys%geo%periodic_dim)
     call kick_init(kick, 1, mesh%sb%dim, geo%periodic_dim)
 
-    e_start = int(min_energy / dw)
-    e_end   = int(max_energy / dw)
+    e_start = nint(min_energy / dw)
+    e_end   = nint(max_energy / dw)
     write(message(1),'(a,1x,i0.7,a,f12.7,a,i0.7,a,f12.7,a)')'Frequency index:',e_start,'(',&
          units_from_atomic(units_out%energy, e_start * dw),')-',e_end,'(',units_from_atomic(units_out%energy, e_end * dw),')' 
     write(message(2),'(a,f12.7,a)')'Frequency Step, dw:  ', units_from_atomic(units_out%energy, dw), &
@@ -567,100 +583,119 @@ contains
       end if
     end if
     
-    call io_mkdir('wd.general')
-    do i_energy = e_start+1, e_end+1
-      write(filename,'(a14,i0.7,a1)')'wd.general/wd.',i_energy-1,'/'
+    call messages_print_stress(wd_info, "File Information")
+    do i_energy = e_start, e_end
+      write(filename,'(a14,i0.7,a1)')'wd.general/wd.',i_energy,'/'
       write(message(1),'(a,a,f12.7,a,1x,i7,a)')trim(filename),' w =', &
-           units_from_atomic(units_out%energy,(i_energy-1) * dw), & 
+           units_from_atomic(units_out%energy,(i_energy) * dw), & 
            '[' // trim(units_abbrev(units_out%energy)) // ']'
+      if (mpi_world%rank == 0) write(wd_info,'(a)') message(1)
       call messages_info(1)
       call io_mkdir(trim(filename))
     end do
+    call io_close(wd_info)
 
+    if(mesh%parallel_in_domains) then
+      ! Delete the last / and find the previous /, if any
+      folder = in_folder(1:len_trim(in_folder)-1)
+      folder_index = index(folder, '/', .true.)
+      restart_folder = folder(1:folder_index)
+      call restart_init(restart, RESTART_UNDEFINED, RESTART_TYPE_LOAD, mesh%mpi_grp, &
+                       ierr, dir=trim(restart_folder), mesh = mesh)
+    end if
+   
     !For each mesh point, open density file and read corresponding point.  
     if (mpi_world%rank == 0) call loct_progress_bar(-1, mesh%np)
 
-    SAFE_ALLOCATE(point_tmp(1:chunk_size+1, 1:e_point+1))
+    SAFE_ALLOCATE(point_tmp(1:chunk_size, 0:time_steps))
     read_count = 0
     ! Space
     do i_space = 1, mesh%np
       ! Time
-      e_point = 0
+      t_point = 0
       do i_time = c_start, c_end, c_step
-        e_point = e_point + 1
-        ! Here, we always iterate folders
-        ! Delete the last / and add the corresponding folder number
-        write(folder,'(a,i0.7,a)') in_folder(1:len_trim(in_folder)-1),i_time,"/"
-        write(filename, '(a,a,a,a)') trim(folder), trim(basename), ".obf"
-        if (mesh%mpi_grp%size > 1) then
-          ii = mesh%vp%local(mesh%vp%xlocal + i_space - 1)
+        
+        if (mesh%parallel_in_domains .and. i_space == 1) then
+          write(folder,'(a,i0.7,a)') in_folder(folder_index+1:len_trim(in_folder)-1),i_time,"/"
+          write(filename, '(a,a,a)') trim(folder), trim(basename)
+          call drestart_read_mesh_function(restart, trim(filename), mesh, point_tmp(:, t_point), ierr)
         else
-          ii = i_space
+          ! Here, we always iterate folders
+          ! Delete the last / and add the corresponding folder number
+          write(folder,'(a,i0.7,a)') in_folder(1:len_trim(in_folder)-1),i_time,"/"
+          write(filename, '(a,a,a,a)') trim(folder), trim(basename), ".obf"
+          if (mod(i_space-1, chunk_size) == 0) then
+            call profiling_in(prof_io,"READING")
+            !TODO: check for any error on the whole file before reading by parts.
+            call io_binary_read(trim(filename), chunk_size, point_tmp(1:chunk_size, t_point), ierr, offset = i_space-1)
+            call profiling_out(prof_io)
+            if (i_time == c_start) read_count = 0
+          end if
         end if
-        ! Read the obf files, in multiples of chunk_size
-        if (mod(i_space-1, chunk_size) == 0) then
-          call profiling_in(prof_io,"READING")
-          !TODO: check for any error on the whole file before reading by parts.
-          call io_binary_read(trim(filename), chunk_size, point_tmp(1:chunk_size+1, e_point), ierr, offset = ii-1)
-          call profiling_out(prof_io)
-           if (i_time == c_start) read_count = 0
-        end if
-        if (i_time == c_start) read_count = read_count + 1
+
         call profiling_out(prof_io)
-        if (subtract_file) then
-          read_ft(e_point) =  point_tmp(read_count, e_point) - read_rff(ii)
-        else
-          read_ft(e_point) = point_tmp(read_count, e_point)
-        end if
+
         if (ierr /= 0 .and. i_space == 1) then
-          write(message(1), '(a,a,2i10)') "Error reading the file ", trim(filename), ii, i_time
+          write(message(1), '(a,a,2i10)') "Error reading the file ", trim(filename), i_space, i_time
           write(message(2), '(a)') "Skipping...."
           write(message(3), '(a,i0)') "Error :", ierr
           call messages_warning(3)
           cycle
         end if
+
+        if (i_time == c_start) read_count = read_count + 1
+        if (subtract_file) then
+          read_ft(t_point) =  point_tmp(read_count, t_point) - read_rff(i_space)
+        else
+          read_ft(t_point) = point_tmp(read_count, t_point)
+        end if
+
+        t_point = t_point + 1
       end do ! Time
 
       select case (ft_method)
       case (FAST_FOURIER)
         call profiling_in(prof_fftw, "CONVERT_FFTW")
-        call fftw_execute_dft_r2c(fft%planf, read_ft(1), out_fft(1))
+        call dfft_forward1(fft, read_ft, out_fft)
         call profiling_out(prof_fftw)
         ! Should the value be multiplied by dt ??? as in standard discrete Fourier Transform ?
-        point_tmp(read_count, 1:e_point+1) = AIMAG(out_fft(1:e_point+1)) * dt
+        point_tmp(read_count, 0:time_steps) = AIMAG(out_fft(0:time_steps)) * dt
       case (STANDARD_FOURIER)
-        tdrho_a(1:e_point+1, 1, 1) = read_ft(1:e_point+1)
+        tdrho_a(0:time_steps, 1, 1) = read_ft(0:time_steps)
         call batch_init(tdrho_b, 1, 1, 1, tdrho_a)
         call batch_init(wdrho_b, 1, 1, 1, wdrho_a)
-        call spectrum_signal_damp(spectrum%damp, spectrum%damp_factor, c_start + 1, c_start + time_steps + 2, & 
+        call spectrum_signal_damp(spectrum%damp, spectrum%damp_factor, c_start + 1, c_start + time_steps + 1, & 
                                   kick%time, dt, tdrho_b)
         call spectrum_fourier_transform(spectrum%method, spectrum%transform, spectrum%noise, &
-              c_start+1, c_start + time_steps + 2, kick%time, dt, tdrho_b, e_start + 1, e_end + 1, &
+              c_start + 1, c_start + time_steps + 1, kick%time, dt, tdrho_b, e_start + 1, e_end + 1, &
               spectrum%energy_step, wdrho_b, spectrum%cmplxscl)
         call batch_end(tdrho_b)
         call batch_end(wdrho_b)
-        point_tmp(read_count, 1:e_point+1) = - wdrho_a(1:e_point+1, 1, 1)
+        do e_point = e_start, e_end
+          point_tmp(read_count, e_point) = - wdrho_a(e_point, 1, 1)
+        end do
       end select
 
       if (mod(i_space-1, 1000) == 0 .and. mpi_world%rank == 0) then
         call loct_progress_bar(i_space-1, mesh%np) 
       end if
       
-      !print out wd densities from (ii-chunksize,ii]
-      if (mod(i_space, chunk_size) == 0) then
-        write(message(1),'(a)') ""
-        write(message(2),'(a,i0)') "Writing binary output: step ", i_space/chunk_size
-        call messages_info(2)
-        !TODO: check if the extra 1 can be removed.
-        do i_energy = e_start+1, e_end+1
-          write(filename,'(a14,i0.7,a12)')'wd.general/wd.',i_energy-1,'/density.obf'
-          ! If it is the first time entering here, write the header. But, only once
-          if (i_space == chunk_size) &
+      !print out wd densities from (ii-chunksize,ii] if running in serial
+      if (mesh%mpi_grp%size == 1) then
+        if (mod(i_space, chunk_size) == 0) then
+          write(message(1),'(a)') ""
+          write(message(2),'(a,i0)') "Writing binary output: step ", i_space/chunk_size
+          call messages_info(2)
+          do i_energy = e_start, e_end
+            write(filename,'(a14,i0.7,a12)')'wd.general/wd.',i_energy,'/density.obf'
+            ! If it is the first time entering here, write the header. But, only once
+            if (i_space == chunk_size) &
                !call write_header(trim(filename), mesh%np_global, ierr)
-               call dwrite_header(trim(filename),mesh%np_global, ierr)
-          call io_binary_write(trim(filename), chunk_size, point_tmp(1:chunk_size, i_energy), ierr, &
-               nohead = .true.)
-        end do
+                call dwrite_header(trim(filename),mesh%np_global, ierr)
+            call io_binary_write(trim(filename), chunk_size, point_tmp(1:chunk_size, i_energy), ierr, &
+                nohead = .true.)
+          end do
+        end if
       end if
     end do ! Space
 
@@ -668,14 +703,24 @@ contains
 #ifdef HAVE_MPI
     call MPI_Barrier(mesh%mpi_grp%comm, mpi_err)
 #endif
-    ! write the output files
-    if (outp%how /= OPTION__OUTPUTFORMAT__BINARY ) then
-      do i_energy = e_start+1, e_end+1
-        write(filename,'(a14,i0.7,a1)')'wd.general/wd.',i_energy-1,'/'
-        call io_binary_read(trim(filename)//'density.obf', mesh%np, read_rff, ierr)
+
+    if(mesh%parallel_in_domains) then
+      do i_energy = e_start, e_end
+        write(filename,'(a14,i0.7,a1)')'wd.general/wd.',i_energy,'/'
         call dio_function_output(outp%how, trim(filename), & 
-           trim('density'), mesh, read_rff, units_out%length**(-mesh%sb%dim), ierr, geo = geo)
+           trim('density'), mesh, point_tmp(:, i_energy), units_out%length**(-mesh%sb%dim), ierr, geo = geo)
       end do
+      call restart_end(restart)
+    else
+      ! write the output files
+      if (outp%how /= OPTION__OUTPUTFORMAT__BINARY ) then
+        do i_energy = e_start, e_end
+          write(filename,'(a14,i0.7,a1)')'wd.general/wd.',i_energy,'/'
+          call io_binary_read(trim(filename)//'density.obf', mesh%np, read_rff, ierr)
+          call dio_function_output(outp%how, trim(filename), & 
+             trim('density'), mesh, read_rff, units_out%length**(-mesh%sb%dim), ierr, geo = geo)
+        end do
+      end if
     end if
     
     SAFE_DEALLOCATE_A(point_tmp)
@@ -716,7 +761,7 @@ contains
 
     !%Variable ConvertScalarOperation
     !%Type block
-    !%Section Utilities::oct-local_multipoles
+    !%Section Utilities::oct-convert
     !%Description
     !% This variable is used to generate a new mesh function as a linear combination
     !% different mesh function having the same mesh. Each row defines an operation for
@@ -758,6 +803,7 @@ contains
 
     SAFE_ALLOCATE(tmp_ff(1:mesh%np))
     SAFE_ALLOCATE(scalar_ff(1:mesh%np))
+    scalar_ff = M_ZERO
 
     do i_op = 1, n_operations
       !read variable name
@@ -791,7 +837,7 @@ contains
       do ip = 1, mesh%np
         call parse_expression(f_re, f_im, trim(var), real(tmp_ff(ip), 8), trim(scalar_expression))
         !TODO: implement use of complex functions. 
-        scalar_ff(ip) = f_re
+        scalar_ff(ip) = scalar_ff(ip) + f_re
       end do
       
       call restart_end(restart)

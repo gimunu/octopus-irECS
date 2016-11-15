@@ -1,5 +1,5 @@
 # -*- coding: utf-8 mode: shell-script -*-
-# $Id: 03-localtarget.01-gs.inp 13978 2015-05-14 16:03:03Z xavier $
+# $Id: 03-localtarget.01-gs.inp 15690 2016-10-25 21:56:26Z xavier $
 #
 # The two lowest eigenstates of the asymmetric double well,
 #  V(x) = 1/64*(x)^4-1/4*(x)^2+1/256*(x)^3
@@ -32,5 +32,7 @@ TheoryLevel = independent_particles
 
 #EigenSolverMaxIter = 1000
 
+ProfilingMode = prof_time
 
+DisableOpenCL = yes
 

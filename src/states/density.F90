@@ -15,47 +15,43 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: density.F90 14871 2015-12-06 13:15:28Z jrfsousa $
+!! $Id: density.F90 15710 2016-11-03 13:33:14Z nicolastd $
 
 #include "global.h"
 
-module density_m
-  use base_states_m
-  use blas_m
-  use batch_m
-  use batch_ops_m
+module density_oct_m
+  use accel_oct_m
+  use base_states_oct_m
+  use blas_oct_m
+  use batch_oct_m
+  use batch_ops_oct_m
   use iso_c_binding
-#ifdef HAVE_OPENCL
-  use cl
-#endif
-  use comm_m
-  use derivatives_m
-  use global_m
-  use grid_m
-  use io_m
-  use kpoints_m
-  use loct_m
-  use math_m
-  use mesh_m
-  use mesh_function_m
-  use messages_m
-  use multigrid_m
-  use multicomm_m
-  use mpi_m ! if not before parser_m, ifort 11.072 can`t compile with MPI2
-  use mpi_lib_m
-  use opencl_m
-  use octcl_kernel_m
-  use profiling_m
-  use simul_box_m
-  use smear_m
-  use states_m
-  use states_dim_m
-  use symmetrizer_m
-  use types_m
-  use unit_m
-  use unit_system_m
-  use utils_m
-  use varinfo_m
+  use comm_oct_m
+  use derivatives_oct_m
+  use global_oct_m
+  use grid_oct_m
+  use io_oct_m
+  use kpoints_oct_m
+  use loct_oct_m
+  use math_oct_m
+  use mesh_oct_m
+  use mesh_function_oct_m
+  use messages_oct_m
+  use multigrid_oct_m
+  use multicomm_oct_m
+  use mpi_oct_m ! if not before parser_m, ifort 11.072 can`t compile with MPI2
+  use mpi_lib_oct_m
+  use profiling_oct_m
+  use simul_box_oct_m
+  use smear_oct_m
+  use states_oct_m
+  use states_dim_oct_m
+  use symmetrizer_oct_m
+  use types_oct_m
+  use unit_oct_m
+  use unit_system_oct_m
+  use utils_oct_m
+  use varinfo_oct_m
 
   implicit none
 
@@ -77,7 +73,7 @@ module density_m
     FLOAT,                pointer :: Imdensity(:, :)
     type(states_t),       pointer :: st
     type(grid_t),         pointer :: gr
-    type(opencl_mem_t)            :: buff_density
+    type(accel_mem_t)            :: buff_density
     integer                       :: pnp
     logical                       :: packed
   end type density_calc_t
@@ -90,6 +86,8 @@ contains
     type(grid_t),         target,   intent(in)    :: gr
     FLOAT,                target,   intent(out)   :: density(:, :)
     FLOAT, optional,      target,   intent(out)   :: Imdensity(:, :)
+
+    logical :: correct_size
 
     PUSH_SUB(density_calc_init)
 
@@ -108,6 +106,10 @@ contains
 
     this%packed = .false.
 
+    correct_size = ubound(this%density, dim = 1) == this%gr%fine%mesh%np .or. &
+         ubound(this%density, dim = 1) == this%gr%fine%mesh%np_part
+    ASSERT(correct_size)
+
     POP_SUB(density_calc_init)
   end subroutine density_calc_init
 
@@ -117,15 +119,14 @@ contains
     type(density_calc_t),           intent(out)   :: this
 
     PUSH_SUB(density_calc_pack)
-
+    
     this%packed = .true.
-#ifdef HAVE_OPENCL    
-    this%pnp = opencl_padded_size(this%gr%mesh%np)
-    call opencl_create_buffer(this%buff_density, CL_MEM_READ_WRITE, TYPE_FLOAT, this%pnp*this%st%d%nspin)
+    this%pnp = accel_padded_size(this%gr%mesh%np)
+    call accel_create_buffer(this%buff_density, ACCEL_MEM_READ_WRITE, TYPE_FLOAT, this%pnp*this%st%d%nspin)
     
     ! set to zero
-    call opencl_set_buffer_to_zero(this%buff_density, TYPE_FLOAT, this%pnp*this%st%d%nspin)
-#endif
+    call accel_set_buffer_to_zero(this%buff_density, TYPE_FLOAT, this%pnp*this%st%d%nspin)
+    
     POP_SUB(density_calc_pack)
   end subroutine density_calc_pack
 
@@ -143,19 +144,13 @@ contains
     CMPLX, allocatable :: psi(:), fpsi(:)
     FLOAT, allocatable :: weight(:), sqpsi(:)
     type(profile_t), save :: prof
-    logical :: correct_size, cmplxscl
-#ifdef HAVE_OPENCL
+    logical :: cmplxscl
     integer            :: wgsize
-    type(opencl_mem_t) :: buff_weight
-    type(cl_kernel)    :: kernel
-#endif
+    type(accel_mem_t) :: buff_weight
+    type(accel_kernel_t), pointer :: kernel
 
     PUSH_SUB(density_calc_accumulate)
     call profiling_in(prof, "CALC_DENSITY")
-
-    correct_size = ubound(this%density, dim = 1) == this%gr%fine%mesh%np .or. &
-         ubound(this%density, dim = 1) == this%gr%fine%mesh%np_part
-    ASSERT(correct_size)
 
     cmplxscl = associated(this%Imdensity)
     
@@ -220,34 +215,33 @@ contains
           end if
         end if
       case(BATCH_CL_PACKED)
-#ifdef HAVE_OPENCL
         if(.not. this%packed) call density_calc_pack(this)
 
         if(states_are_real(this%st)) then
-          kernel = kernel_density_real
+          kernel => kernel_density_real
         else
-          kernel = kernel_density_complex
+          kernel => kernel_density_complex
         end if
 
-        call opencl_create_buffer(buff_weight, CL_MEM_READ_ONLY, TYPE_FLOAT, psib%nst)
-        call opencl_write_buffer(buff_weight, psib%nst, weight)
+        call accel_create_buffer(buff_weight, ACCEL_MEM_READ_ONLY, TYPE_FLOAT, psib%nst)
+        call accel_write_buffer(buff_weight, psib%nst, weight)
 
-        call opencl_set_kernel_arg(kernel, 0, psib%nst)
-        call opencl_set_kernel_arg(kernel, 1, this%gr%mesh%np)
-        call opencl_set_kernel_arg(kernel, 2, this%pnp*(ispin - 1))
-        call opencl_set_kernel_arg(kernel, 3, buff_weight)
-        call opencl_set_kernel_arg(kernel, 4, psib%pack%buffer)
-        call opencl_set_kernel_arg(kernel, 5, log2(psib%pack%size(1)))
-        call opencl_set_kernel_arg(kernel, 6, this%buff_density)
+        call accel_set_kernel_arg(kernel, 0, psib%nst)
+        call accel_set_kernel_arg(kernel, 1, this%gr%mesh%np)
+        call accel_set_kernel_arg(kernel, 2, this%pnp*(ispin - 1))
+        call accel_set_kernel_arg(kernel, 3, buff_weight)
+        call accel_set_kernel_arg(kernel, 4, psib%pack%buffer)
+        call accel_set_kernel_arg(kernel, 5, log2(psib%pack%size(1)))
+        call accel_set_kernel_arg(kernel, 6, this%buff_density)
 
-        wgsize = opencl_kernel_workgroup_size(kernel)
+        wgsize = accel_kernel_workgroup_size(kernel)
         
-        call opencl_kernel_run(kernel, (/pad(this%gr%mesh%np, wgsize)/), (/wgsize/))
+        call accel_kernel_run(kernel, (/pad(this%gr%mesh%np, wgsize)/), (/wgsize/))
 
-        call opencl_finish()
+        call accel_finish()
         
-        call opencl_release_buffer(buff_weight)
-#endif
+        call accel_release_buffer(buff_weight)
+        
       end select
 
     else if(this%gr%have_fine_mesh) then
@@ -326,19 +320,16 @@ contains
     FLOAT, allocatable :: tmpdensity(:)
     integer :: ispin, ip
     type(profile_t), save :: reduce_prof
-#ifdef HAVE_OPENCL
     FLOAT, allocatable :: fdensity(:)
-#endif
 
     PUSH_SUB(density_calc_end)
 
     if(this%packed) then
-#ifdef HAVE_OPENCL
       SAFE_ALLOCATE(tmpdensity(1:this%gr%mesh%np_part))
 
       ! the density is in device memory
       do ispin = 1, this%st%d%nspin
-        call opencl_read_buffer(this%buff_density, this%gr%mesh%np, tmpdensity, offset = (ispin - 1)*this%pnp)
+        call accel_read_buffer(this%buff_density, this%gr%mesh%np, tmpdensity, offset = (ispin - 1)*this%pnp)
 
         if(this%gr%have_fine_mesh) then
            SAFE_ALLOCATE(fdensity(1:this%gr%fine%mesh%np))
@@ -352,9 +343,8 @@ contains
       end do
 
       this%packed = .false.
-      call opencl_release_buffer(this%buff_density)
+      call accel_release_buffer(this%buff_density)
       SAFE_DEALLOCATE_A(tmpdensity)
-#endif
     end if
 
     ! reduce over states and k-points
@@ -668,7 +658,7 @@ contains
 #include "complex.F90"
 #include "density_inc.F90"
 
-end module density_m
+end module density_oct_m
 
 
 !! Local Variables:

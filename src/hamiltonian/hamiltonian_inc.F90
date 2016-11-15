@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: hamiltonian_inc.F90 15001 2016-01-07 06:56:31Z xavier $
+!! $Id: hamiltonian_inc.F90 15473 2016-07-12 02:58:36Z xavier $
 
 ! ---------------------------------------------------------
 subroutine X(hamiltonian_apply_batch) (hm, der, psib, hpsib, ik, time, Imtime, terms, set_bc)
@@ -61,10 +61,10 @@ subroutine X(hamiltonian_apply_batch) (hm, der, psib, hpsib, ik, time, Imtime, t
   ASSERT(psib%nst == hpsib%nst)
   ASSERT(ik >= hm%d%kpt%start .and. ik <= hm%d%kpt%end)
 
-  apply_phase = associated(hm%phase)
+  apply_phase = associated(hm%hm_base%phase)
 
   pack = hamiltonian_apply_packed(hm, der%mesh) &
-    .and. (opencl_is_enabled() .or. psib%nst_linear > 1) &
+    .and. (accel_is_enabled() .or. psib%nst_linear > 1) &
     .and. terms_ == TERM_ALL
 
   if(pack) then
@@ -82,7 +82,7 @@ subroutine X(hamiltonian_apply_batch) (hm, der, psib, hpsib, ik, time, Imtime, t
   end if
 
   if(apply_phase) then ! we copy psi to epsi applying the exp(i k.r) phase
-    call X(hamiltonian_phase)(hm, der, der%mesh%np_part, ik, .false., epsib, src = psib)
+    call X(hamiltonian_base_phase)(hm%hm_base, der, der%mesh%np_part, ik, .false., epsib, src = psib)
   end if
 
   if(iand(TERM_KINETIC, terms_) /= 0) then
@@ -163,7 +163,7 @@ subroutine X(hamiltonian_apply_batch) (hm, der, psib, hpsib, ik, time, Imtime, t
   end if
 
   if(apply_phase) then
-    call X(hamiltonian_phase)(hm, der, der%mesh%np, ik, .true., hpsib)
+    call X(hamiltonian_base_phase)(hm%hm_base, der, der%mesh%np, ik, .true., hpsib)
     call batch_end(epsib)
     SAFE_DEALLOCATE_P(epsib)
   end if
@@ -188,10 +188,8 @@ subroutine X(hamiltonian_external)(this, mesh, psib, vpsib)
 
   FLOAT, dimension(:), pointer :: vpsl
   FLOAT, allocatable :: vpsl_spin(:,:), Imvpsl_spin(:,:)
-#ifdef HAVE_OPENCL
   integer :: pnp, offset, ispin
-  type(opencl_mem_t) :: vpsl_buff
-#endif
+  type(accel_mem_t) :: vpsl_buff
 
   PUSH_SUB(X(hamiltonian_external))
 
@@ -227,22 +225,20 @@ subroutine X(hamiltonian_external)(this, mesh, psib, vpsib)
   end if
 
   if(batch_status(psib) == BATCH_CL_PACKED) then
-#ifdef HAVE_OPENCL
-    pnp = opencl_padded_size(mesh%np)
-    call opencl_create_buffer(vpsl_buff, CL_MEM_READ_ONLY, TYPE_FLOAT, pnp * this%d%nspin)
-    call opencl_write_buffer(vpsl_buff, mesh%np, vpsl)
+    pnp = accel_padded_size(mesh%np)
+    call accel_create_buffer(vpsl_buff, ACCEL_MEM_READ_ONLY, TYPE_FLOAT, pnp * this%d%nspin)
+    call accel_write_buffer(vpsl_buff, mesh%np, vpsl)
 
     offset = 0
     do ispin = 1, this%d%nspin
-       call opencl_write_buffer(vpsl_buff, mesh%np, vpsl_spin(:, ispin), offset = offset)
+       call accel_write_buffer(vpsl_buff, mesh%np, vpsl_spin(:, ispin), offset = offset)
        offset = offset + pnp
     end do
 
     call X(hamiltonian_base_local_sub)(vpsl_spin, mesh, this%d, 1, &
       psib, vpsib, potential_opencl = vpsl_buff)
 
-    call opencl_release_buffer(vpsl_buff)
-#endif
+    call accel_release_buffer(vpsl_buff)
   else
     if(this%cmplxscl%space) then
       call X(hamiltonian_base_local_sub)(vpsl_spin, mesh, this%d, 1, &
@@ -322,13 +318,13 @@ subroutine X(hamiltonian_apply_all) (hm, xc, der, st, hst, time, Imtime)
     end do
   end if
 
-  if(hamiltonian_oct_exchange(hm)) then
+  if(oct_exchange_enabled(hm%oct_exchange)) then
 
     SAFE_ALLOCATE(psiall(der%mesh%np_part, 1:hst%d%dim, st%st_start:st%st_end, st%d%kpt%start:st%d%kpt%end))
 
     call states_get_state(st, der%mesh, psiall)
     
-    call hamiltonian_prepare_oct_exchange(hm, der%mesh, psiall, xc)
+    call oct_exchange_prepare(hm%oct_exchange, der%mesh, psiall, xc)
 
     SAFE_DEALLOCATE_A(psiall)
     
@@ -337,7 +333,7 @@ subroutine X(hamiltonian_apply_all) (hm, xc, der, st, hst, time, Imtime)
     do ik = 1, st%d%nik
       do ist = 1, st%nst
         call states_get_state(hst, der%mesh, ist, ik, psi)
-        call X(oct_exchange_operator)(hm, der, psi, ist, ik)
+        call X(oct_exchange_operator)(hm%oct_exchange, der, psi, ist, ik)
         call states_set_state(hst, der%mesh, ist, ik, psi)
       end do
     end do
@@ -680,54 +676,7 @@ subroutine X(scdm_exchange_operator) (hm, der, psib, hpsib, ik, exx_coef)
 end subroutine X(scdm_exchange_operator)
 
 ! ---------------------------------------------------------
-subroutine X(oct_exchange_operator) (hm, der, hpsi, ist, ik)
-  type(hamiltonian_t), intent(in)    :: hm
-  type(derivatives_t), intent(in)    :: der
-  R_TYPE,              intent(inout) :: hpsi(:, :)
-  integer,             intent(in)    :: ist
-  integer,             intent(in)    :: ik
 
-  integer :: ik2
-  R_TYPE, allocatable :: psi(:, :), psi2(:, :)
-  integer :: ip
-
-  PUSH_SUB(X(oct_exchange_operator))
-
-  SAFE_ALLOCATE(psi(1:der%mesh%np, 1:hm%d%dim))
-  SAFE_ALLOCATE(psi2(1:der%mesh%np, 1:hm%d%dim))
-
-  select case(hm%d%ispin)
-  case(UNPOLARIZED)
-    ASSERT(hm%d%nik  ==  1)
-    call states_get_state(hm%oct_st, der%mesh, ist, 1, psi2)
-    forall(ip = 1:der%mesh%np)
-      hpsi(ip, 1) = hpsi(ip, 1) + M_TWO*M_zI*psi2(ip, 1)*(hm%oct_pot(ip, 1) + hm%oct_fxc(ip, 1, 1)*hm%oct_rho(ip, 1))
-    end forall
-
-  case(SPIN_POLARIZED)
-    ASSERT(hm%d%nik  ==  2)
-
-    call states_get_state(hm%oct_st, der%mesh, ist, ik, psi2)
-
-    do ik2 = 1, 2
-      forall(ip = 1:der%mesh%np)
-        hpsi(ip, 1) = hpsi(ip, 1) + M_TWO * M_zI * hm%oct_st%occ(ist, ik) * &
-          psi2(ip, 1) * (hm%oct_pot(ip, ik2) + hm%oct_fxc(ip, ik, ik2)*hm%oct_rho(ip, ik2))
-       end forall
-     end do
-
-  case(SPINORS)
-    call messages_not_implemented("Function oct_exchange_operator_all for spin_polarized or spinors")
-  end select
-
-  SAFE_DEALLOCATE_A(psi)
-  SAFE_DEALLOCATE_A(psi2)
-  POP_SUB(X(oct_exchange_operator))
-end subroutine X(oct_exchange_operator)
-
-
-
-! ---------------------------------------------------------
 subroutine X(magnus) (hm, der, psi, hpsi, ik, vmagnus)
   type(hamiltonian_t), intent(in)    :: hm
   type(derivatives_t), intent(in)    :: der
@@ -796,8 +745,8 @@ subroutine X(vborders) (der, hm, psi, hpsi)
 
   PUSH_SUB(X(vborders))
 
-  if(hm%ab == IMAGINARY_ABSORBING) then
-    forall(ip = 1:der%mesh%np) hpsi(ip) = hpsi(ip) + M_zI*hm%ab_pot(ip)*psi(ip)
+  if(hm%bc%abtype == IMAGINARY_ABSORBING) then
+    forall(ip = 1:der%mesh%np) hpsi(ip) = hpsi(ip) + M_zI*hm%bc%mf(ip)*psi(ip)
   end if
    
   POP_SUB(X(vborders))
@@ -880,12 +829,12 @@ subroutine X(vmask) (gr, hm, st)
 
   SAFE_ALLOCATE(psi(1:gr%mesh%np))
 
-  if(hm%ab == MASK_ABSORBING) then
+  if(hm%bc%abtype == MASK_ABSORBING) then
     do ik = st%d%kpt%start, st%d%kpt%end
       do ist = st%st_start, st%st_end
         do idim = 1, st%d%dim
           call states_get_state(st, gr%mesh, idim, ist, ik, psi)
-          psi(1:gr%mesh%np) = psi(1:gr%mesh%np)*(M_ONE - hm%ab_pot(1:gr%mesh%np))
+          psi(1:gr%mesh%np) = psi(1:gr%mesh%np)*hm%bc%mf(1:gr%mesh%np)
           call states_set_state(st, gr%mesh, idim, ist, ik, psi)
         end do
       end do
@@ -937,125 +886,6 @@ subroutine X(hamiltonian_diagonal) (hm, der, diag, ik)
 
   POP_SUB(X(hamiltonian_diagonal))
 end subroutine X(hamiltonian_diagonal)
-
-
-! ---------------------------------------------------------
-subroutine X(hamiltonian_phase)(this, der, np, iqn, conjugate, psib, src)
-  type(hamiltonian_t),                   intent(in)    :: this
-  type(derivatives_t),                   intent(in)    :: der
-  integer,                               intent(in)    :: np
-  integer,                               intent(in)    :: iqn
-  logical,                               intent(in)    :: conjugate
-  type(batch_t),                 target, intent(inout) :: psib
-  type(batch_t),       optional, target, intent(in)    :: src
-
-  integer :: ip, ii
-  type(batch_t), pointer :: src_
-  type(profile_t), save :: phase_prof
-  CMPLX :: phase
-#ifdef HAVE_OPENCL
-  integer :: wgsize
-  type(octcl_kernel_t), save :: ker_phase
-  type(cl_kernel) :: kernel
-#endif
-
-  PUSH_SUB(X(hamiltonian_phase))
-  call profiling_in(phase_prof, "PBC_PHASE_APPLY")
-
-  call profiling_count_operations(R_MUL*dble(np)*psib%nst_linear)
-
-  ASSERT(np <= der%mesh%np_part)
-
-  src_ => psib
-  if(present(src)) src_ => src
-
-  select case(batch_status(psib))
-  case(BATCH_PACKED)
-
-    if(conjugate) then
-
-      !$omp parallel do private(ip, ii, phase)
-      do ip = 1, np
-        phase = conjg(this%phase(ip, iqn))
-        do ii = 1, psib%nst_linear
-          psib%pack%X(psi)(ii, ip) = phase*src_%pack%X(psi)(ii, ip)
-        end do
-      end do
-      !$omp end parallel do
-
-    else
-
-      !$omp parallel do private(ip, ii, phase)
-      do ip = 1, np
-        phase = this%phase(ip, iqn)
-        do ii = 1, psib%nst_linear
-          psib%pack%X(psi)(ii, ip) = phase*src_%pack%X(psi)(ii, ip)
-        end do
-      end do
-      !$omp end parallel do
-
-    end if
-
-  case(BATCH_NOT_PACKED)
-
-    if(conjugate) then
-
-      !$omp parallel private(ii, ip)
-      do ii = 1, psib%nst_linear
-        !$omp do
-        do ip = 1, np
-          psib%states_linear(ii)%X(psi)(ip) = conjg(this%phase(ip, iqn))*src_%states_linear(ii)%X(psi)(ip)
-        end do
-        !$omp end do nowait
-      end do
-      !$omp end parallel
-
-    else
-      !$omp parallel private(ii, ip)
-      do ii = 1, psib%nst_linear
-        !$omp do
-        do ip = 1, np
-          psib%states_linear(ii)%X(psi)(ip) = this%phase(ip, iqn)*src_%states_linear(ii)%X(psi)(ip)
-        end do
-        !$omp end do nowait
-      end do
-      !$omp end parallel
-
-    end if
-
-  case(BATCH_CL_PACKED)
-#ifdef HAVE_OPENCL
-    call octcl_kernel_start_call(ker_phase, 'phase.cl', 'phase_hamiltonian')
-    kernel = octcl_kernel_get_ref(ker_phase)
-
-    if(conjugate) then
-      call opencl_set_kernel_arg(kernel, 0, 1_4)
-    else
-      call opencl_set_kernel_arg(kernel, 0, 0_4)
-    end if
-
-    call opencl_set_kernel_arg(kernel, 1, (iqn - this%d%kpt%start)*der%mesh%np_part)
-    call opencl_set_kernel_arg(kernel, 2, np)
-    call opencl_set_kernel_arg(kernel, 3, this%buff_phase)
-    call opencl_set_kernel_arg(kernel, 4, src_%pack%buffer)
-    call opencl_set_kernel_arg(kernel, 5, log2(src_%pack%size(1)))
-    call opencl_set_kernel_arg(kernel, 6, psib%pack%buffer)
-    call opencl_set_kernel_arg(kernel, 7, log2(psib%pack%size(1)))
-
-    wgsize = opencl_kernel_workgroup_size(kernel)/psib%pack%size(1)
-
-    call opencl_kernel_run(kernel, (/psib%pack%size(1), pad(np, wgsize)/), (/psib%pack%size(1), wgsize/))
-
-    call opencl_finish()
-#endif
-  end select
-
-  call batch_pack_was_modified(psib)
-
-
-  call profiling_out(phase_prof)
-  POP_SUB(X(hamiltonian_phase))
-end subroutine X(hamiltonian_phase)
 
 ! ---------------------------------------------------------
 subroutine X(rdmft_exchange_operator) (hm, der, ik, psib, hpsib)

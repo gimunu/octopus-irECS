@@ -15,49 +15,50 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: lcao.F90 14868 2015-12-05 13:42:29Z jrfsousa $
+!! $Id: lcao.F90 15326 2016-05-02 07:18:41Z xavier $
 
 #include "global.h"
 
-module lcao_m
-  use atom_m
-  use batch_m
-  use blacs_proc_grid_m
-  use geometry_m
-  use global_m
-  use grid_m
-  use hamiltonian_m
-  use io_m
-  use io_function_m
-  use lalg_adv_m
-  use lalg_basic_m
-  use lapack_m
-  use loct_m
-  use magnetic_m
-  use math_m
-  use mesh_m
-  use mesh_function_m
-  use messages_m
-  use mpi_m ! if not before parser_m, ifort 11.072 can`t compile with MPI2
-  use mpi_debug_m
-  use parser_m
-  use periodic_copy_m
-  use profiling_m
-  use ps_m
-  use simul_box_m
-  use scalapack_m
-  use species_m
-  use species_pot_m
-  use states_m
-  use states_calc_m
-  use states_dim_m
-  use states_io_m
-  use submesh_m
-  use system_m
-  use unit_m
-  use unit_system_m
-  use v_ks_m
-  use varinfo_m
+module lcao_oct_m
+  use atom_oct_m
+  use batch_oct_m
+  use blacs_proc_grid_oct_m
+  use geometry_oct_m
+  use global_oct_m
+  use grid_oct_m
+  use hamiltonian_oct_m
+  use io_oct_m
+  use io_function_oct_m
+  use lalg_adv_oct_m
+  use lalg_basic_oct_m
+  use lapack_oct_m
+  use loct_oct_m
+  use magnetic_oct_m
+  use math_oct_m
+  use mesh_oct_m
+  use mesh_function_oct_m
+  use messages_oct_m
+  use mpi_oct_m ! if not before parser_m, ifort 11.072 can`t compile with MPI2
+  use mpi_debug_oct_m
+  use parser_oct_m
+  use periodic_copy_oct_m
+  use profiling_oct_m
+  use ps_oct_m
+  use quickrnd_oct_m
+  use simul_box_oct_m
+  use scalapack_oct_m
+  use species_oct_m
+  use species_pot_oct_m
+  use states_oct_m
+  use states_calc_oct_m
+  use states_dim_oct_m
+  use states_io_oct_m
+  use submesh_oct_m
+  use system_oct_m
+  use unit_oct_m
+  use unit_system_oct_m
+  use v_ks_oct_m
+  use varinfo_oct_m
 
   implicit none
 
@@ -89,6 +90,7 @@ module lcao_m
     integer, pointer  :: ck(:, :)
     real(4), pointer  :: dbuff(:, :, :, :) !< single-precision buffer
     complex(4), pointer :: zbuff(:, :, :, :) !< single-precision buffer
+    logical           :: initialized_orbitals
     FLOAT             :: orbital_scale_factor
 
     !> For the alternative LCAO
@@ -462,10 +464,13 @@ contains
         this%norbs = this%maxorbs
       end if
 
+      if(this%mode == OPTION__LCAOSTART__LCAO_SIMPLE) this%norbs = this%maxorbs
+      
       ASSERT(this%norbs <= this%maxorbs)
 
       SAFE_ALLOCATE(this%cst(1:this%norbs, 1:st%d%spin_channels))
       SAFE_ALLOCATE(this%ck(1:this%norbs, 1:st%d%spin_channels))
+      this%initialized_orbitals = .false.
     else
       call lcao2_init()
     end if
@@ -716,7 +721,9 @@ contains
 
     call lcao_init(lcao, sys%gr, sys%geo, sys%st)
 
-    call lcao_init_orbitals(lcao, sys%st, sys%gr, sys%geo, start = st_start)
+    if(lcao%mode /= OPTION__LCAOSTART__LCAO_SIMPLE) then
+      call lcao_init_orbitals(lcao, sys%st, sys%gr, sys%geo, start = st_start)
+    end if
 
     if (.not. present(st_start)) then
       call lcao_guess_density(lcao, sys%st, sys%gr, sys%gr%sb, sys%geo, sys%st%qtot, sys%st%d%nspin, &
@@ -790,7 +797,7 @@ contains
       end if
 
       ! Randomly generate the initial wavefunctions.
-      call states_generate_random(sys%st, sys%gr%mesh, ist_start_ = st_start_random)
+      call states_generate_random(sys%st, sys%gr%mesh, ist_start_ = st_start_random, normalized = .false.)
 
       call messages_write('Orthogonalizing wavefunctions.')
       call messages_info()
@@ -1358,7 +1365,7 @@ contains
 #include "lcao_inc.F90"
 
 
-end module lcao_m
+end module lcao_oct_m
 
 !! Local Variables:
 !! mode: f90

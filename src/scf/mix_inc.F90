@@ -15,37 +15,32 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: mix_inc.F90 14798 2015-11-19 18:24:50Z xavier $
+!! $Id: mix_inc.F90 15523 2016-07-24 23:22:19Z xavier $
 
 ! ---------------------------------------------------------
-subroutine X(mixing)(smix, vin, vout, vnew, dotp)
+subroutine X(mixing)(smix, vin, vout, vnew)
   type(mix_t),  intent(inout) :: smix
   R_TYPE,       intent(in)    :: vin(:, :, :), vout(:, :, :)
   R_TYPE,       intent(out)   :: vnew(:, :, :)
-  interface
-    R_TYPE function dotp(x, y)
-      implicit none
-      R_TYPE, intent(in) :: x(:)
-      R_TYPE, intent(in) :: y(:)
-    end function dotp
-  end interface
   
   PUSH_SUB(X(mixing))
+
+  ASSERT(associated(smix%der))
   
   smix%iter = smix%iter + 1
   
   select case (smix%scheme)
   case (OPTION__MIXINGSCHEME__LINEAR)
-    call X(mixing_linear)(smix%alpha, smix%d1, smix%d2, smix%d3, vin, vout, vnew)
+    call X(mixing_linear)(smix%coeff, smix%d1, smix%d2, smix%d3, vin, vout, vnew)
     
   case (OPTION__MIXINGSCHEME__BROYDEN)
-    call X(mixing_broyden)(smix, vin, vout, vnew, smix%iter, dotp)
+    call X(mixing_broyden)(smix, vin, vout, vnew, smix%iter)
     
   case (OPTION__MIXINGSCHEME__DIIS)
-    call X(mixing_diis)(smix, vin, vout, vnew, smix%iter, dotp)
+    call X(mixing_diis)(smix, vin, vout, vnew, smix%iter)
 
   case (OPTION__MIXINGSCHEME__BOWLER_GILLAN)
-    call X(mixing_grpulay)(smix, vin, vout, vnew, smix%iter, dotp)
+    call X(mixing_grpulay)(smix, vin, vout, vnew, smix%iter)
     
   end select
   
@@ -54,33 +49,26 @@ end subroutine X(mixing)
 
 
 ! ---------------------------------------------------------
-subroutine X(mixing_linear)(alpha, d1, d2, d3, vin, vout, vnew)
-  FLOAT,        intent(in) :: alpha
+subroutine X(mixing_linear)(coeff, d1, d2, d3, vin, vout, vnew)
+  FLOAT,        intent(in) :: coeff
   integer,      intent(in) :: d1, d2, d3
   R_TYPE,       intent(in) :: vin(:, :, :), vout(:, :, :)
   R_TYPE,       intent(out):: vnew(:, :, :)
 
   PUSH_SUB(X(mixing_linear))
   
-  vnew(1:d1, 1:d2, 1:d3) = vin(1:d1, 1:d2, 1:d3)*(M_ONE - alpha) + alpha*vout(1:d1, 1:d2, 1:d3)
+  vnew(1:d1, 1:d2, 1:d3) = vin(1:d1, 1:d2, 1:d3)*(M_ONE - coeff) + coeff*vout(1:d1, 1:d2, 1:d3)
   
   POP_SUB(X(mixing_linear))
 end subroutine X(mixing_linear)
 
 
 ! ---------------------------------------------------------
-subroutine X(mixing_broyden)(smix, vin, vout, vnew, iter, dotp)
-  type(mix_t), intent(inout) :: smix
-  R_TYPE,         intent(in) :: vin(:, :, :), vout(:, :, :)
-  R_TYPE,         intent(out):: vnew(:, :, :)
-  integer,        intent(in) :: iter
-  interface
-    R_TYPE function dotp(x, y) result(res)
-      implicit none
-      R_TYPE, intent(in) :: x(:)
-      R_TYPE, intent(in) :: y(:)
-    end function dotp
-  end interface
+subroutine X(mixing_broyden)(smix, vin, vout, vnew, iter)
+  type(mix_t),    intent(inout) :: smix
+  R_TYPE,         intent(in)    :: vin(:, :, :), vout(:, :, :)
+  R_TYPE,         intent(out)   :: vnew(:, :, :)
+  integer,        intent(in)    :: iter
 
   integer :: ipos, iter_used, i, j, d1, d2, d3
   R_TYPE :: gamma
@@ -103,12 +91,11 @@ subroutine X(mixing_broyden)(smix, vin, vout, vnew, iter, dotp)
     call lalg_copy(d1, d2, d3, vin(:, :, :), smix%X(dv)(:, :, :, ipos))
     call lalg_axpy(d1, d2, d3, R_TOTYPE(-M_ONE), smix%X(f_old)(:, :, :),   smix%X(df)(:, :, :, ipos))
     call lalg_axpy(d1, d2, d3, R_TOTYPE(-M_ONE), smix%X(vin_old)(:, :, :), smix%X(dv)(:, :, :, ipos))
-
     
     gamma = M_ZERO
     do i = 1, d2
       do j = 1, d3
-        gamma = gamma + dotp(smix%X(df)(:, i, j, ipos), smix%X(df)(:, i, j, ipos))
+        gamma = gamma + X(mix_dotp)(smix, smix%X(df)(:, i, j, ipos), smix%X(df)(:, i, j, ipos))
       end do
     end do
     gamma = sqrt(gamma)
@@ -130,8 +117,7 @@ subroutine X(mixing_broyden)(smix, vin, vout, vnew, iter, dotp)
   
   ! extrapolate new vector
   iter_used = min(iter -1, smix%ns)
-  call X(broyden_extrapolation)(smix%alpha, d1, d2, d3, vin, vnew, iter_used, f, &
-       smix%X(df), smix%X(dv), dotp)
+  call X(broyden_extrapolation)(smix, smix%coeff, d1, d2, d3, vin, vnew, iter_used, f, smix%X(df), smix%X(dv))
 
   SAFE_DEALLOCATE_A(f)
 
@@ -140,19 +126,13 @@ end subroutine X(mixing_broyden)
 
 
 ! ---------------------------------------------------------
-subroutine X(broyden_extrapolation)(alpha, d1, d2, d3, vin, vnew, iter_used, f, df, dv, dotp)
-  FLOAT,    intent(in)       :: alpha
-  integer,  intent(in)       :: d1, d2, d3, iter_used
-  R_TYPE,   intent(in)       :: vin(:, :, :), f(:, :, :)
-  R_TYPE,   intent(in)       :: df(:, :, :, :), dv(:, :, :, :)
-  R_TYPE,   intent(out)      :: vnew(:, :, :)
-  interface
-    R_TYPE function dotp(x, y) result(res)
-      implicit none
-      R_TYPE, intent(in) :: x(:)
-      R_TYPE, intent(in) :: y(:)
-    end function dotp
-  end interface
+subroutine X(broyden_extrapolation)(this, coeff, d1, d2, d3, vin, vnew, iter_used, f, df, dv)
+  type(mix_t), intent(inout) :: this
+  FLOAT,       intent(in)    :: coeff
+  integer,     intent(in)    :: d1, d2, d3, iter_used
+  R_TYPE,      intent(in)    :: vin(:, :, :), f(:, :, :)
+  R_TYPE,      intent(in)    :: df(:, :, :, :), dv(:, :, :, :)
+  R_TYPE,      intent(out)   :: vnew(:, :, :)
   
   FLOAT, parameter :: w0 = CNST(0.01), ww = M_FIVE
   integer  :: i, j, k, l
@@ -163,7 +143,7 @@ subroutine X(broyden_extrapolation)(alpha, d1, d2, d3, vin, vnew, iter_used, f, 
   
   if (iter_used == 0) then
     ! linear mixing...
-    vnew(1:d1, 1:d2, 1:d3) = vin(1:d1, 1:d2, 1:d3) + alpha*f(1:d1, 1:d2, 1:d3)
+    vnew(1:d1, 1:d2, 1:d3) = vin(1:d1, 1:d2, 1:d3) + coeff*f(1:d1, 1:d2, 1:d3)
     POP_SUB(X(broyden_extrapolation))
     return
   end if
@@ -178,7 +158,7 @@ subroutine X(broyden_extrapolation)(alpha, d1, d2, d3, vin, vnew, iter_used, f, 
       beta(i, j) = M_ZERO
       do k = 1, d2
         do l = 1, d3
-          beta(i, j) = beta(i, j) + ww * ww * dotp(df(:, k, l, j), df(:, k, l, i))
+          beta(i, j) = beta(i, j) + ww*ww*X(mix_dotp)(this, df(:, k, l, j), df(:, k, l, i))
         end do
       end do
       beta(j, i) = R_CONJ(beta(i, j))
@@ -193,19 +173,18 @@ subroutine X(broyden_extrapolation)(alpha, d1, d2, d3, vin, vnew, iter_used, f, 
     work(i) = M_ZERO
     do k = 1, d2
       do l = 1, d3
-        work(i) = work(i) + dotp(df(:, k, l, i), f(:, k, l))
+        work(i) = work(i) + X(mix_dotp)(this, df(:, k, l, i), f(:, k, l))
       end do
     end do
   end do
 
   ! linear mixing term
-  vnew(1:d1, 1:d2, 1:d3) = vin(1:d1, 1:d2, 1:d3) + alpha*f(1:d1, 1:d2, 1:d3)
+  vnew(1:d1, 1:d2, 1:d3) = vin(1:d1, 1:d2, 1:d3) + coeff*f(1:d1, 1:d2, 1:d3)
   
   ! other terms
   do i = 1, iter_used
-    gamma = ww * sum(beta(:, i) * work(:))
-    vnew(1:d1, 1:d2, 1:d3) = vnew(1:d1, 1:d2, 1:d3) - ww*gamma*(alpha*df(1:d1, 1:d2, 1:d3, i) + &
-        dv(1:d1, 1:d2, 1:d3, i))
+    gamma = ww*sum(beta(:, i)*work(:))
+    vnew(1:d1, 1:d2, 1:d3) = vnew(1:d1, 1:d2, 1:d3) - ww*gamma*(coeff*df(1:d1, 1:d2, 1:d3, i) + dv(1:d1, 1:d2, 1:d3, i))
   end do
   
   SAFE_DEALLOCATE_A(beta)
@@ -216,28 +195,19 @@ end subroutine X(broyden_extrapolation)
 
 !--------------------------------------------------------------------
 
-subroutine X(mixing_diis)(this, vin, vout, vnew, iter, dotp)
+subroutine X(mixing_diis)(this, vin, vout, vnew, iter)
   type(mix_t), intent(inout) :: this
   R_TYPE,      intent(in)    :: vin(:, :, :)
   R_TYPE,      intent(in)    :: vout(:, :, :)
   R_TYPE,      intent(out)   :: vnew(:, :, :)
   integer,     intent(in)    :: iter
-  interface
-    R_TYPE function dotp(x, y) result(res)
-      implicit none
-      R_TYPE, intent(in) :: x(:)
-      R_TYPE, intent(in) :: y(:)
-    end function dotp
-  end interface
 
   integer :: size, ii, jj, kk, ll
-  FLOAT :: sumaa
-  FLOAT, allocatable :: aa(:, :), alpha(:)
-  
+  FLOAT :: sumalpha
+  R_TYPE, allocatable :: aa(:, :), alpha(:), rhs(:)
+
   PUSH_SUB(X(mixing_diis))
 
-  print*, "ITER", iter
-  
   if(iter <= this%d4) then
 
     size = iter
@@ -256,95 +226,64 @@ subroutine X(mixing_diis)(this, vin, vout, vnew, iter, dotp)
   call lalg_copy(this%d1, this%d2, this%d3, vin, this%X(dv)(:, :, :, size))
   this%X(df)(1:this%d1, 1:this%d2, 1:this%d3, size) = vout(1:this%d1, 1:this%d2, 1:this%d3) - vin(1:this%d1, 1:this%d2, 1:this%d3)
 
-  if(iter == 1) then
+  if(iter == 1 .or. mod(iter, this%interval) /= 0) then
 
-    vnew(1:this%d1, 1:this%d2, 1:this%d3) = (CNST(1.0) - this%alpha)*vin(1:this%d1, 1:this%d2, 1:this%d3) &
-      + this%alpha*vout(1:this%d1, 1:this%d2, 1:this%d3)
+    vnew(1:this%d1, 1:this%d2, 1:this%d3) = (CNST(1.0) - this%coeff)*vin(1:this%d1, 1:this%d2, 1:this%d3) &
+      + this%coeff*vout(1:this%d1, 1:this%d2, 1:this%d3)
 
-!    vnew(1:this%d1, 1:this%d2, 1:this%d3) = vin(1:this%d1, 1:this%d2, 1:this%d3)
-    
     POP_SUB(X(mixing_diis))
     return
   end if
  
 
-  print*, "res ", dotp(this%X(df)(:, 1, 1, size), this%X(df)(:, 1, 1, size))
-  
-  SAFE_ALLOCATE(aa(1:size, 1:size))
-  SAFE_ALLOCATE(alpha(1:size))
-  
+  SAFE_ALLOCATE(aa(1:size + 1, 1:size + 1))
+  SAFE_ALLOCATE(alpha(1:size + 1))
+  SAFE_ALLOCATE(rhs(1:size + 1))
+
   do ii = 1, size
     do jj = 1, size
 
       aa(ii, jj) = CNST(0.0)
       do kk = 1, this%d2
         do ll = 1, this%d3
-          aa(ii, jj) = aa(ii, jj) + dotp(this%X(df)(:, kk, ll, jj), this%X(df)(:, kk, ll, ii))
+          aa(ii, jj) = aa(ii, jj) + X(mix_dotp)(this, this%X(df)(:, kk, ll, jj), this%X(df)(:, kk, ll, ii))
         end do
       end do
       
     end do
   end do
 
-  print*, "============"
-
-  do ii = 1, size
-    print*, aa(ii, :)
-  end do
+  aa(1:size, size + 1) = CNST(-1.0)
+  aa(size + 1, 1:size) = CNST(-1.0)
+  aa(size + 1, size + 1) = CNST(0.0)
   
-  sumaa = lalg_inverter(size, aa)
+  rhs(1:size) = CNST(0.0)
+  rhs(size + 1) = CNST(-1.0)
 
-  print*, "============"
+  call lalg_least_squares(size + 1, aa, rhs, alpha)
+
+  sumalpha = sum(alpha(1:size))
+  alpha = alpha/sumalpha
   
-  do ii = 1, size
-    print*, aa(ii, :)
-  end do
-
-  print*, "SUM", sumaa
-
-  if(abs(sumaa) > CNST(1e-8)) then
-    
-    sumaa = sum(aa(1:size, 1:size))
-    
-    do ii = 1, size
-      alpha(ii) = sum(aa(1:size, ii))/sumaa
-    end do
-
-  else
-
-    alpha(1:size - 1) = CNST(0.0)
-    alpha(size) = CNST(1.0)
-    
-  end if
-
-  print*, "---------------"
-  print*, alpha, "sum = ", sum(alpha)
-  print*, "---------------"
-
   vnew(1:this%d1, 1:this%d2, 1:this%d3) = CNST(0.0)
-  do ii = 1, size
-    vnew(1:this%d1, 1:this%d2, 1:this%d3) = &
-      vnew(1:this%d1, 1:this%d2, 1:this%d3) + alpha(ii)*this%X(dv)(1:this%d1, 1:this%d2, 1:this%d3, ii)
-  end do
   
+  do ii = 1, size
+    vnew(1:this%d1, 1:this%d2, 1:this%d3) = vnew(1:this%d1, 1:this%d2, 1:this%d3) &
+      + alpha(ii)*(this%X(dv)(1:this%d1, 1:this%d2, 1:this%d3, ii) &
+      + this%residual_coeff*this%X(df)(1:this%d1, 1:this%d2, 1:this%d3, ii))
+  end do
+
   POP_SUB(X(mixing_diis))
 end subroutine X(mixing_diis)
 
 ! ---------------------------------------------------------
 ! Guaranteed-reduction Pulay
 ! ---------------------------------------------------------
-subroutine X(mixing_grpulay)(smix, vin, vout, vnew, iter, dotp)
+subroutine X(mixing_grpulay)(smix, vin, vout, vnew, iter)
   type(mix_t), intent(inout) :: smix
   integer,      intent(in)   :: iter
   R_TYPE,        intent(in)   :: vin(:, :, :), vout(:, :, :)
   R_TYPE,        intent(out)  :: vnew(:, :, :)
-  interface
-    R_TYPE function dotp(x, y) result(res)
-      implicit none
-      R_TYPE, intent(in) :: x(:)
-      R_TYPE, intent(in) :: y(:)
-    end function dotp
-  end interface
   
   integer :: d1, d2, d3
   integer :: ipos, iter_used
@@ -390,9 +329,8 @@ subroutine X(mixing_grpulay)(smix, vin, vout, vnew, iter, dotp)
 
     ! extrapolate new vector
     iter_used = min(iter/2, smix%ns + 1)
-    call X(pulay_extrapolation)(d2, d3, vin, vout, vnew, iter_used, f, &
-         smix%X(df)(1:d1, 1:d2, 1:d3, 1:iter_used), &
-         smix%X(dv)(1:d1, 1:d2, 1:d3, 1:iter_used), dotp)
+    call X(pulay_extrapolation)(smix, d2, d3, vin, vout, vnew, iter_used, f, &
+         smix%X(df)(1:d1, 1:d2, 1:d3, 1:iter_used), smix%X(dv)(1:d1, 1:d2, 1:d3, 1:iter_used))
 
   end select
 
@@ -403,18 +341,12 @@ end subroutine X(mixing_grpulay)
 
 
 ! ---------------------------------------------------------
-subroutine X(pulay_extrapolation)(d2, d3, vin, vout, vnew, iter_used, f, df, dv, dotp)
+subroutine X(pulay_extrapolation)(this, d2, d3, vin, vout, vnew, iter_used, f, df, dv)
+  type(mix_t), intent(in) :: this
   integer, intent(in) :: d2, d3
   integer, intent(in)   :: iter_used
   R_TYPE,  intent(in)  :: vin(:, :, :), vout(:, :, :), f(:, :, :), df(:, :, :, :), dv(:, :, :, :)
   R_TYPE,  intent(out) :: vnew(:, :, :)
-  interface
-    R_TYPE function dotp(x, y) result(res)
-      implicit none
-      R_TYPE, intent(in) :: x(:)
-      R_TYPE, intent(in) :: y(:)
-    end function dotp
-  end interface
   
   integer :: i, j, k, l
   R_TYPE :: alpha, determinant
@@ -431,7 +363,7 @@ subroutine X(pulay_extrapolation)(d2, d3, vin, vout, vnew, iter_used, f, df, dv,
       a(i, j) = M_ZERO
       do k = 1, d2
         do l = 1, d3
-          a(i, j) = a(i, j) + dotp(df(:, k, l, j), df(:, k, l, i))
+          a(i, j) = a(i, j) + X(mix_dotp)(this, df(:, k, l, j), df(:, k, l, i))
         end do
       end do
       if(j > i) a(j, i) = a(i, j)
@@ -453,7 +385,7 @@ subroutine X(pulay_extrapolation)(d2, d3, vin, vout, vnew, iter_used, f, df, dv,
     do j = 1, iter_used
       do k = 1, d2
         do l = 1, d3
-          alpha = alpha - a(i, j) * dotp(df(:, k, l, j), f(:, k, l))
+          alpha = alpha - a(i, j)*X(mix_dotp)(this, df(:, k, l, j), f(:, k, l))
         end do
       end do
     end do
@@ -465,7 +397,38 @@ subroutine X(pulay_extrapolation)(d2, d3, vin, vout, vnew, iter_used, f, df, dv,
   POP_SUB(X(pulay_extrapolation))
 end subroutine X(pulay_extrapolation)
 
+! --------------------------------------------------------------
 
+R_TYPE function X(mix_dotp)(this, xx, yy) result(dotp)
+  type(mix_t), intent(in) :: this
+  R_TYPE,      intent(in) :: xx(:)
+  R_TYPE,      intent(in) :: yy(:)
+
+  R_TYPE, allocatable :: ff(:), precff(:)
+  
+  PUSH_SUB(X(mix_dotp))
+
+  ASSERT(this%d1 == this%der%mesh%np)
+  
+  if(this%precondition) then
+
+    SAFE_ALLOCATE(ff(1:this%der%mesh%np_part))
+    SAFE_ALLOCATE(precff(1:this%der%mesh%np))
+
+    ff(1:this%der%mesh%np) = yy(1:this%der%mesh%np)
+    call X(derivatives_perform)(this%preconditioner, this%der, ff, precff)
+    dotp = X(mf_dotp)(this%der%mesh, xx, precff)
+
+    SAFE_DEALLOCATE_A(precff)
+    SAFE_DEALLOCATE_A(ff)
+      
+  else
+    dotp = X(mf_dotp)(this%der%mesh, xx, yy)
+  end if
+
+  POP_SUB(X(mix_dotp))
+  
+end function X(mix_dotp)
 
 !! Local Variables:
 !! mode: f90

@@ -15,28 +15,28 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: pes_spm.F90 14976 2016-01-05 14:27:54Z xavier $
+!! $Id: pes_spm.F90 15582 2016-08-14 10:27:12Z philipp $
 
 #include "global.h"
 
-module pes_spm_m
-  use global_m
-  use io_m
-  use mesh_m
-  use messages_m
-  use mpi_m
-  use comm_m
-  use parser_m
-  use profiling_m
-  use restart_m
-  use simul_box_m
-  use states_m
-  use unit_m
-  use unit_system_m
-  use hamiltonian_m
-  use lasers_m
-  use varinfo_m
-  use mesh_interpolation_m
+module pes_spm_oct_m
+  use global_oct_m
+  use io_oct_m
+  use mesh_oct_m
+  use messages_oct_m
+  use mpi_oct_m
+  use comm_oct_m
+  use parser_oct_m
+  use profiling_oct_m
+  use restart_oct_m
+  use simul_box_oct_m
+  use states_oct_m
+  use unit_oct_m
+  use unit_system_oct_m
+  use hamiltonian_oct_m
+  use lasers_oct_m
+  use varinfo_oct_m
+  use mesh_interpolation_oct_m
 
   implicit none
 
@@ -55,6 +55,7 @@ module pes_spm_m
   type pes_spm_t
     integer                    :: nspoints                  !< how many points we store the wf
     FLOAT, pointer             :: rcoords(:,:)              !< coordinates of the sample points
+    FLOAT, pointer             :: rcoords_nrm(:,:)
     CMPLX, pointer             :: wf(:,:,:,:,:)   => NULL() !< wavefunctions at sample points
     FLOAT, pointer             :: dq(:,:)         => NULL() !< part 1 of Volkov phase (recipe phase) 
     FLOAT, pointer             :: domega(:)       => NULL() !< part 2 of Volkov phase (recipe phase)
@@ -66,8 +67,7 @@ module pes_spm_m
     logical                    :: onfly                     !< spectrum is calculated on-the-fly when true
     integer                    :: save_iter                 !< output interval and size of arrays 
     logical                    :: sphgrid                   !< use a spherical grid (instead of sample points from input)
-    integer                    :: nstepsphi, nstepstheta
-    FLOAT                      :: thetamin
+    integer                    :: nstepsphir, nstepsthetar
     type(mesh_interpolation_t) :: interp
   end type pes_spm_t
 
@@ -85,16 +85,21 @@ contains
     integer,         intent(in)  :: save_iter
 
     type(block_t) :: blk
-    integer       :: sdim, mdim
+    integer       :: stst, stend, kptst, kptend, sdim, mdim
+    integer       :: imdim
     integer       :: isp
     integer       :: ith, iph
-    FLOAT         :: theta, phi, radius
+    FLOAT         :: thetar, phir, radius
     FLOAT         :: xx(MAX_DIM)
 
     PUSH_SUB(pes_spm_init)
 
-    sdim = st%d%dim
-    mdim = mesh%sb%dim
+    stst   = st%st_start
+    stend  = st%st_end
+    kptst  = st%d%kpt%start
+    kptend = st%d%kpt%end
+    sdim   = st%d%dim
+    mdim   = mesh%sb%dim
 
     message(1) = 'Info: Calculating PES using sample point technique.'
     call messages_info(1)
@@ -138,7 +143,7 @@ contains
     !% Calculate the photoelectron spectrum by including the Volkov phase (approximately), see
     !% P. M. Dinh, P. Romaniello, P.-G. Reinhard, and E. Suraud, <i>Phys. Rev. A.</i> <b>87</b>, 032514 (2013).
     !%End
-    call parse_variable('PES_spm_recipe', M_RAW, this%recipe)
+    call parse_variable('PES_spm_recipe', M_PHASE, this%recipe)
     if(.not.varinfo_valid_option('PES_spm_recipe', this%recipe, is_flag = .true.)) &
       call messages_input_error('PES_spm_recipe')
     call messages_print_var_option(stdout, "PES_spm_recipe", this%recipe)
@@ -182,8 +187,8 @@ contains
     !% Number of steps in theta (0 <= theta <= pi) for the spherical grid (if no 
     !% PES_spm_points are given).
     !%End
-    call parse_variable('PES_spm_StepsThetaR', 45, this%nstepstheta)
-    if(this%sphgrid .and. this%nstepstheta < 0) call messages_input_error('PES_spm_StepsThetaR')
+    call parse_variable('PES_spm_StepsThetaR', 45, this%nstepsthetar)
+    if(this%sphgrid .and. this%nstepsthetar < 0) call messages_input_error('PES_spm_StepsThetaR')
 
     !%Variable PES_spm_StepsPhiR
     !%Type integer
@@ -193,10 +198,10 @@ contains
     !% Number of steps in phi (0 <= phi <= 2 pi) for the spherical grid (if no
     !% PES_spm_points are given).
     !%End
-    call parse_variable('PES_spm_StepsPhiR', 90, this%nstepsphi)
+    call parse_variable('PES_spm_StepsPhiR', 90, this%nstepsphir)
     if(this%sphgrid) then
-      if(this%nstepsphi < 0)  call messages_input_error('PES_spm_StepsPhiR')
-      if(this%nstepsphi == 0) this%nstepsphi = 1
+      if(this%nstepsphir < 0)  call messages_input_error('PES_spm_StepsPhiR')
+      if(this%nstepsphir == 0) this%nstepsphir = 1
     end if
 
     !%Variable PES_spm_Radius
@@ -233,44 +238,46 @@ contains
       ! setting values for spherical grid 
       select case(mdim)
       case(1)
-        this%thetamin = M_PI / M_TWO
-        this%nstepstheta   = 0
-        this%nstepsphi     = 2
-        this%nspoints  = this%nstepsphi
+        this%nstepsthetar   = 0
+        this%nstepsphir     = 2
+        this%nspoints  = this%nstepsphir
 
       case(2)
-        this%thetamin = M_PI / M_TWO
-        this%nstepstheta   = 0
-        this%nspoints  = this%nstepsphi
-
-        call messages_print_var_value(stdout, "PES_spm_StepsPhiR", this%nstepsphi)
+        this%nstepsthetar   = 0
+        this%nspoints  = this%nstepsphir
 
       case(3)
-        this%thetamin = M_ZERO
-        if(this%nstepstheta <= 1) this%nstepsphi = 1
-        this%nspoints  = this%nstepsphi * (this%nstepstheta - 1) + 2
-
-        call messages_print_var_value(stdout, "PES_spm_StepsPhiR", this%nstepsphi)
-        call messages_print_var_value(stdout, "PES_spm_StepsThetaR", this%nstepstheta)
+        if(this%nstepsthetar <= 1) then
+          this%nstepsphir = 1
+          this%nstepsthetar = 1
+        end if
+        this%nspoints  = this%nstepsphir * (this%nstepsthetar - 1) + 2
 
       end select
+
+      if(mdim == 3) call messages_print_var_value(stdout, "PES_spm_StepsThetaR", this%nstepsthetar)
+      call messages_print_var_value(stdout, "PES_spm_StepsPhiR", this%nstepsphir)
+
     end if
 
     call messages_print_var_value(stdout, "Number of sample points", this%nspoints)
 
     SAFE_ALLOCATE(this%rcoords(1:mdim, 1:this%nspoints))
+    SAFE_ALLOCATE(this%rcoords_nrm(1:mdim, 1:this%nspoints))
 
     if(.not. this%sphgrid) then
 
-      message(1) = 'Info: Reading sample points.'
+      message(1) = 'Info: Reading sample points from input.'
       call messages_info(1)
 
       ! read points from input file
       do isp = 1, this%nspoints
-        call parse_block_float(blk, isp - 1, 0, xx(1), units_inp%length)
-        call parse_block_float(blk, isp - 1, 1, xx(2), units_inp%length)
-        call parse_block_float(blk, isp - 1, 2, xx(3), units_inp%length)
+        do imdim = 1, mdim
+          call parse_block_float(blk, isp - 1, imdim - 1, xx(imdim), units_inp%length)
+        end do
         this%rcoords(1:mdim, isp) = xx(1:mdim)
+        this%rcoords_nrm(1:mdim, isp) = this%rcoords(1:mdim, isp) / &
+          sqrt(dot_product(this%rcoords(:, isp), this%rcoords(:, isp)))
       end do
       call parse_block_end(blk)
 
@@ -280,30 +287,24 @@ contains
       call messages_info(1)
 
       ! initializing spherical grid
+      thetar = M_PI / M_TWO
       isp = 0
-      do ith = 0, this%nstepstheta
-        if(ith == 0) then
-          theta = this%thetamin     ! pi/2 for 1d and 2d. zero for 3d.
-        else
-          theta = ith * M_PI / this%nstepstheta
-        end if
-        do iph = 0, this%nstepsphi - 1
-          if(iph == 0) then
-            phi = M_ZERO
-          else
-            phi = iph * M_TWO * M_PI / this%nstepsphi
-          end if
+      do ith = 0, this%nstepsthetar
+        if(mdim == 3) thetar = ith * M_PI / this%nstepsthetar
+        do iph = 0, this%nstepsphir - 1
           isp = isp + 1
-                        this%rcoords(1, isp) = radius * cos(phi) * sin(theta)
-          if(mdim >= 2) this%rcoords(2, isp) = radius * sin(phi) * sin(theta)
-          if(mdim == 3) this%rcoords(3, isp) = radius * cos(theta)
-          if(theta == M_ZERO .or. theta == M_PI) exit
+          phir = iph * M_TWO * M_PI / this%nstepsphir
+                        this%rcoords_nrm(1, isp) = cos(phir) * sin(thetar)
+          if(mdim >= 2) this%rcoords_nrm(2, isp) = sin(phir) * sin(thetar)
+          if(mdim == 3) this%rcoords_nrm(3, isp) = cos(thetar)
+          this%rcoords(1:mdim, isp) = radius * this%rcoords_nrm(1:mdim, isp)
+          if(mdim == 3 .and. (ith == 0 .or. ith == this%nstepsthetar)) exit
         end do
       end do
 
     end if
 
-    SAFE_ALLOCATE(this%wf(1:st%nst, 1:sdim, 1:st%d%nik, 1:this%nspoints, 0:save_iter-1))
+    SAFE_ALLOCATE(this%wf(stst:stend, 1:sdim, kptst:kptend, 1:this%nspoints, 0:save_iter-1))
 
     if(this%recipe == M_PHASE) then
       SAFE_ALLOCATE(this%dq(1:this%nspoints, 0:save_iter-1))
@@ -314,7 +315,7 @@ contains
 
     if(this%onfly) then
       this%nomega = nint(this%omegamax/this%delomega)
-      SAFE_ALLOCATE(this%wfft(1:st%nst, 1:sdim, 1:st%d%nik, 1:this%nspoints, 1:this%nomega))
+      SAFE_ALLOCATE(this%wfft(stst:stend, 1:sdim, kptst:kptend, 1:this%nspoints, 1:this%nomega))
       this%wfft = M_z0
     end if
 
@@ -332,6 +333,7 @@ contains
 
     SAFE_DEALLOCATE_P(this%wf)
     SAFE_DEALLOCATE_P(this%rcoords)
+    SAFE_DEALLOCATE_P(this%rcoords_nrm)
 
     SAFE_DEALLOCATE_P(this%wfft)
 
@@ -353,7 +355,7 @@ contains
 
     integer            :: stst, stend, kptst, kptend, sdim, mdim
     integer            :: ist, ik, isdim
-    integer            :: ii
+    integer            :: itstep
 
     CMPLX, allocatable :: psistate(:), wfftact(:,:,:,:,:)
     CMPLX              :: rawfac
@@ -364,7 +366,7 @@ contains
 
     PUSH_SUB(pes_spm_calc)
 
-    ii = mod(iter-1, this%save_iter)
+    itstep = mod(iter-1, this%save_iter)
 
     stst   = st%st_start
     stend  = st%st_end
@@ -386,7 +388,7 @@ contains
     end if
 
     ! needed for allreduce, otherwise it will take values from previous cycle
-    this%wf(:,:,:,:,ii) = M_z0
+    this%wf(:,:,:,:,itstep) = M_z0
 
     do ik = kptst, kptend 
       do ist = stst, stend
@@ -394,44 +396,33 @@ contains
           call states_get_state(st, mesh, isdim, ist, ik, psistate(1:mesh%np_part))
           call mesh_interpolation_evaluate(this%interp, this%nspoints, psistate(1:mesh%np_part), &
             this%rcoords(1:mdim, 1:this%nspoints), interp_values(1:this%nspoints))
-          this%wf(ist, isdim, ik, :, ii) = interp_values(:)
+          this%wf(ist, isdim, ik, :, itstep) = st%occ(ist, ik) * interp_values(:)
         end do
       end do
     end do
-    if(st%parallel_in_states .or. st%d%kpt%parallel) then
-#if defined(HAVE_MPI)
-      ! interpolated values have already been communicated over domains
-      call comm_allreduce(st%st_kpt_mpi_grp%comm, this%wf(:,:,:,:,ii))
-#endif
-    end if
 
     if(this%recipe == M_PHASE) then
-      call pes_spm_calc_rcphase(this, mesh, iter, dt, hm, ii)
+      call pes_spm_calc_rcphase(this, mesh, iter, dt, hm, itstep)
     end if
 
     if(this%onfly) then
       do iom = 1, this%nomega
         omega = iom*this%delomega
-        rawfac = exp(M_zI * omega * iter * dt) * dt
+        rawfac = exp(M_zI * omega * iter * dt) * dt / (M_TWO * M_PI)**(mdim/M_TWO)
 
-        select case(this%recipe)
-        case(M_RAW)
-          wfftact(stst:stend, 1:sdim, kptst:kptend, :, iom) = this%wf(stst:stend, 1:sdim, kptst:kptend, :, ii) * rawfac
-        case(M_PHASE)
-          phasefac(:) = exp(M_zI * (this%domega(ii) - sqrt(M_TWO * omega) * this%dq(:, ii)))
+        if(this%recipe == M_RAW) then
+          wfftact(stst:stend, 1:sdim, kptst:kptend, :, iom) = &
+            rawfac * sqrt(M_TWO * omega) * this%wf(stst:stend, 1:sdim, kptst:kptend, :, itstep)
+        else
+          phasefac(:) = rawfac * exp(M_zI * (this%domega(itstep) - sqrt(M_TWO * omega) * this%dq(:, itstep)))
 
           do ik = kptst, kptend
             do ist = stst, stend
               do isdim = 1, sdim
-                wfftact(ist, isdim, ik, :, iom) = this%wf(ist, isdim, ik, :, ii) * phasefac(:) * rawfac
+                wfftact(ist, isdim, ik, :, iom) = phasefac(:) * this%wf(ist, isdim, ik, :, itstep) * sqrt(M_TWO * omega)
               end do
             end do
           end do
-        end select
-        if(st%parallel_in_states .or. st%d%kpt%parallel) then
-#if defined(HAVE_MPI)
-          call comm_allreduce(st%st_kpt_mpi_grp%comm, wfftact(:,:,:,:,iom))
-#endif
         end if
       end do
 
@@ -459,178 +450,300 @@ contains
     integer            :: ist, ik, isdim
     integer            :: ii, jj
     integer            :: isp, save_iter, isp_save
-    integer            :: iom, ith, iph, iphi
-    FLOAT              :: omega, theta, phi
+    integer            :: iom, ith, iph, iphi, itot
+    FLOAT              :: omega, thetar, phir
     CMPLX              :: vfu
-    FLOAT              :: wfu
+    FLOAT              :: wfu, weight
     FLOAT, allocatable :: wffttot(:,:)
-    FLOAT              :: spctrsum, weight
-    character(len=4)   :: filenr
+    FLOAT, allocatable :: spctrsum(:,:,:,:), spctrout(:,:)
+    character(len=80)  :: filenr
     integer            :: iunitone, iunittwo
-    integer            :: mdim
+    integer            :: stst, stend, kptst, kptend, sdim, mdim
 
     PUSH_SUB(pes_spm_output)
 
-    mdim = mesh%sb%dim
+    stst   = st%st_start
+    stend  = st%st_end
+    kptst  = st%d%kpt%start
+    kptend = st%d%kpt%end
+    sdim   = st%d%dim
+    mdim   = mesh%sb%dim
 
     save_iter = this%save_iter
 
     if(this%onfly) then
-      SAFE_ALLOCATE(wffttot(1:this%nomega, 1:this%nspoints))
-      wffttot = M_ZERO
+      SAFE_ALLOCATE(spctrsum(1:st%nst, 1:sdim, 1:st%d%nik, 1:this%nomega))
+      spctrsum = M_ZERO
 
-      ! calculate total spectrum
-      do iom = 1, this%nomega
-        do ik = 1, st%d%nik
-          do ist = 1, st%nst
-            do isdim = 1, st%d%dim
-              wffttot(iom, :) = real(this%wfft(ist, isdim, ik, :, iom))**2 + aimag(this%wfft(ist, isdim, ik,:, iom))**2 &
-                + wffttot(iom, :)
-            end do
+      SAFE_ALLOCATE(spctrout(1:this%nspoints, 1:this%nomega))
+      spctrout = M_ZERO
+
+      do ik = kptst, kptend 
+        do ist = stst, stend
+          do isdim = 1, sdim
+
+            if(this%sphgrid) then
+
+              select case(mdim)
+              case(1)
+                weight = M_HALF
+   
+                do iom = 1, this%nomega
+                  spctrsum(ist, isdim, ik, iom) = spctrsum(ist, isdim, ik, iom) + &
+                    sum(abs(this%wfft(ist, isdim, ik, :, iom)**M_TWO),1) * weight
+                end do
+   
+              case(2)
+                weight = M_TWO * M_PI / this%nstepsphir
+   
+                do iom = 1, this%nomega
+                  do iph = 0, this%nstepsphir - 1
+                    spctrsum(ist, isdim, ik, iom) = spctrsum(ist, isdim, ik, iom) + &
+                      abs(this%wfft(ist, isdim, ik, iph, iom))**M_TWO * weight
+                  end do
+                end do
+   
+              case(3)
+                do iom = 1, this%nomega
+                  isp = 0
+       
+                  do ith = 0, this%nstepsthetar
+                    thetar = ith * M_PI / this%nstepsthetar
+       
+                    if(ith == 0 .or. ith == this%nstepsthetar) then
+                      weight = (M_ONE - cos(M_PI / this%nstepsthetar / M_TWO)) * M_TWO * M_PI
+                    else
+                      weight = abs(cos(thetar - M_PI / this%nstepsthetar / M_TWO) - &
+                        cos(thetar + M_PI / this%nstepsthetar / M_TWO)) * M_TWO * M_PI / this%nstepsphir
+                    end if
+       
+                    do iph = 0, this%nstepsphir - 1
+                      isp = isp + 1
+                      spctrsum(ist, isdim, ik, iom) = spctrsum(ist, isdim, ik, iom) + &
+                        abs(this%wfft(ist, isdim, ik, isp, iom))**M_TWO * weight
+       
+                      if(ith == 0 .or. ith == this%nstepsthetar) exit
+                    end do
+                  end do
+                end do
+              end select
+
+              ! distribution
+              spctrout(1:this%nspoints, 1:this%nomega) = spctrout(1:this%nspoints, 1:this%nomega) + &
+                abs(this%wfft(ist, isdim, ik, 1:this%nspoints, 1:this%nomega))**M_TWO
+
+            end if
           end do
         end do
       end do
-    end if
 
-    if(.not. this%sphgrid .or. debug%info) then   ! too much output for spherical grid
-      do isp = 1, this%nspoints
-        write(filenr, '(i4.4)') isp
+      if(st%parallel_in_states .or. st%d%kpt%parallel) then
+#if defined(HAVE_MPI)
+        ! total spectrum = sum over all states
+        call comm_allreduce(st%st_kpt_mpi_grp%comm, spctrout)
+
+        ! orbital spectra
+        call comm_allreduce(st%st_kpt_mpi_grp%comm, spctrsum)
+#endif
+      end if
+
+      ! -----------------------------------------------------------------
+      ! OUTPUT FOR SPHERICAL GRID 
+      ! -----------------------------------------------------------------
+      if(this%sphgrid) then
+        iunittwo = io_open('td.general/'//'PES_spm.distribution.out', action='write', position='rewind')
+        iunitone = io_open('td.general/'//'PES_spm.power.sum', action='write', position='rewind')
+        write(iunitone, '(a23)') '# omega, total spectrum'
    
-        iunitone = io_open('td.general/'//'PES_spm.'//filenr//'.wavefunctions.out', action='write', position='append')
-        if(this%recipe == M_PHASE) &
-          iunittwo = io_open('td.general/'//'PES_spm.'//filenr//'.phase.out', action='write', position='append')
+        select case(mdim)
+        case(1)
+          write(iunittwo, '(a40)') '# omega, distribution (left/right point)'
    
-        do ii = 1, save_iter - mod(iter, save_iter)
-          jj = iter - save_iter + ii + mod(save_iter - mod(iter, save_iter), save_iter)
-          write(iunitone, '(e17.10)', advance='no') units_from_atomic(units_inp%time, jj * dt)
-          do ik = 1, st%d%nik
-            do ist = 1, st%nst
-              do isdim = 1, st%d%dim
-                vfu = units_from_atomic(sqrt(units_out%length**(-3)), this%wf(ist, isdim, ik, isp, ii-1))
-                write(iunitone, '(1x,e18.10E3,1x,e18.10E3)', advance='no') &
-                  real(vfu),  aimag(vfu)
-              end do
-            end do
+          do iom = 1, this%nomega
+            omega = iom * this%delomega
+            write(iunittwo, '(5(1x,e18.10E3))') omega, spctrout(2, iom), spctrout(1, iom)
+            write(iunitone, '(2(1x,e18.10E3))') omega, sum(sum(sum(spctrsum(:,:,:,iom),1),1),1) * sqrt(M_TWO * omega)
           end do
-          write(iunitone, '(1x)', advance='yes')
-
-          if(this%recipe == M_PHASE) then
-            write(iunittwo, '(e17.10)', advance='no') units_from_atomic(units_inp%time, jj * dt)
-            write(iunittwo, '(1x,e18.10E3,1x,e18.10E3)', advance='no') &
-              this%domega(ii-1), this%dq(isp, ii-1)
+   
+        case(2)
+          write(iunittwo, '(a26)') '# omega, phi, distribution'
+   
+          do iom = 1, this%nomega
+            omega = iom * this%delomega
+   
+            do iph = 0, this%nstepsphir - 1
+              phir = iph * M_TWO * M_PI / this%nstepsphir
+              write(iunittwo,'(5(1x,e18.10E3))') omega, phir, spctrout(iph + 1, iom)
+            end do
+            ! just repeat the result for output
+            write(iunittwo,'(5(1x,e18.10E3))') omega, M_TWO * M_PI, spctrout(1, iom)
             write(iunittwo, '(1x)', advance='yes')
-          end if
-        end do
-        call io_close(iunitone)
-        if(this%recipe == M_PHASE) call io_close(iunittwo)
-
-        if(this%onfly) then
-          iunitone = io_open('td.general/'//'PES_spm.'//filenr//'.spectrum.out', action='write', position='rewind')
-          write(iunitone, '(a44)') '# frequency, total spectrum, orbital spectra'
-          do iom = 1, this%nomega 
-            omega = iom*this%delomega
-            write(iunitone, '(e17.10, 1x, e17.10)', advance='no') omega, wffttot(iom, isp)
+   
+            write(iunitone, '(2(1x,e18.10E3))', advance='no') omega, sum(sum(sum(spctrsum(:,:,:,iom),1),1),1) * sqrt(M_TWO * omega)
+   
             do ik = 1, st%d%nik
-              do ist = 1, st%nst 
+              do ist = 1, st%nst
                 do isdim = 1, st%d%dim
-                  wfu = real(this%wfft(ist, isdim, ik, isp, iom))**2 + aimag(this%wfft(ist, isdim, ik, isp, iom))**2
-                  write(iunitone,'(1x,e18.10e3)', advance='no') wfu
+                  write(iunitone, '(1x,e18.10E3)', advance='no') spctrsum(ist, isdim, ik, iom) * sqrt(M_TWO * omega)
                 end do
               end do
             end do
-          write(iunitone,'(1x)', advance='yes')
+            write(iunitone, '(1x)', advance='yes')
+                                                                                                    
+          end do
+   
+        case(3)
+          write(iunittwo, '(a33)') '# omega, theta, phi, distribution'
+   
+          do iom = 1, this%nomega
+            omega = iom * this%delomega
+            isp = 0
+   
+            do ith = 0, this%nstepsthetar
+              thetar = ith * M_PI / this%nstepsthetar
+   
+              do iph = 0, this%nstepsphir - 1
+                isp = isp + 1
+   
+                phir = iph * M_TWO * M_PI / this%nstepsphir
+                if(iph == 0) isp_save = isp
+                write(iunittwo,'(5(1x,e18.10E3))') omega, thetar, phir, spctrout(isp, iom)
+     
+                ! just repeat the result for output
+                if(this%nstepsphir > 1 .and. iph == (this%nstepsphir - 1)) then
+                  write(iunittwo,'(5(1x,e18.10E3))') omega, thetar, M_TWO * M_PI, spctrout(isp_save, iom)
+                end if
+                 
+                ! just repeat the result for output
+                if(ith == 0 .or. ith == this%nstepsthetar) then
+                  if(this%nstepsphir > 1) then
+                    do iphi = 1, this%nstepsphir
+                      phir = iphi * M_TWO * M_PI / this%nstepsphir
+                      write(iunittwo,'(5(1x,e18.10E3))') omega, thetar, phir, spctrout(isp, iom)
+                    end do
+                  end if
+                  exit
+                end if
+              end do
+   
+              if(this%nstepsphir > 1 .or. ith == this%nstepsthetar) write(iunittwo, '(1x)', advance='yes')
+            end do
+
+            ! write total and orbital spectra
+            write(iunitone, '(2(1x,e18.10E3))', advance='no') omega, sum(sum(sum(spctrsum(:,:,:,iom),1),1),1) * sqrt(M_TWO * omega)
+            do ik = 1, st%d%nik
+              do ist = 1, st%nst
+                do isdim = 1, st%d%dim
+                  write(iunitone, '(1x,e18.10E3)', advance='no') spctrsum(ist, isdim, ik, iom) * sqrt(M_TWO * omega)
+                end do
+              end do
+            end do
+            write(iunitone, '(1x)', advance='yes')
+   
+          end do
+        end select
+        call io_close(iunittwo)
+        call io_close(iunitone)
+
+      end if
+    end if
+
+    ! -----------------------------------------------------------------
+    ! DEBUG OUTPUT 
+    ! -----------------------------------------------------------------
+    if(.not. this%sphgrid .or. debug%info) then   ! too much output for spherical grid
+      if(mpi_grp_is_root(mesh%mpi_grp)) then
+        do ik = kptst, kptend
+          do ist = stst, stend
+            do isdim = 1, sdim
+              itot = ist + (ik-1) * st%nst + (isdim-1) * st%nst*st%d%kpt%nglobal
+              write(*,*) 'TEST', itot
+              write(filenr, '(i10.10)') itot
+   
+              iunitone = io_open('td.general/'//'PES_spm.'//trim(filenr)//'.wavefunctions.out', action='write', position='append')
+     
+              do ii = 1, save_iter - mod(iter, save_iter)
+                jj = iter - save_iter + ii + mod(save_iter - mod(iter, save_iter), save_iter)
+                write(iunitone, '(e17.10)', advance='yes') units_from_atomic(units_inp%time, jj * dt)
+   
+                do isp = 1, this%nspoints
+                  vfu = units_from_atomic(sqrt(units_out%length**(-3)), this%wf(ist, isdim, ik, isp, ii-1))
+                  write(iunitone, '(1x,e18.10E3,1x,e18.10E3)', advance='no') real(vfu), aimag(vfu)
+                end do
+                write(iunitone, '(1x)', advance='yes')
+              end do
+   
+              call io_close(iunitone)
+            end do
+          end do
+        end do
+
+        if(this%onfly) then
+          do ik = kptst, kptend
+            do ist = stst, stend
+              do isdim = 1, sdim
+                itot = ist + (ik-1) * st%nst + (isdim-1) * st%nst*st%d%kpt%nglobal
+                write(filenr, '(i10.10)') itot
+   
+                iunitone = io_open('td.general/'//'PES_spm.'//trim(filenr)//'.spectrum.out', action='write', position='rewind')
+                write(iunitone, '(a48)') '# frequency, orbital spectrum at sampling points'
+   
+                do iom = 1, this%nomega 
+                  omega = iom*this%delomega
+                  write(iunitone, '(e17.10, 1x)', advance='no') omega
+   
+                  do isp = 1, this%nspoints
+                    write(iunitone, '(e17.10, 1x)', advance='no') abs(this%wfft(ist, isdim, ik, isp, iom))**M_TWO
+                  end do
+   
+                  write(iunitone, '(1x)', advance='yes')
+                end do
+   
+                call io_close(iunitone)
+              end do
+            end do
+          end do
+        end if
+      end if
+
+      if(mpi_grp_is_root(mpi_world)) then
+        if(this%recipe == M_PHASE) then
+          do isp = 1, this%nspoints
+            write(filenr, '(i10.10)') isp
+            iunittwo = io_open('td.general/'//'PES_spm.'//trim(filenr)//'.phase.out', action='write', position='append')
+      
+            do ii = 1, save_iter - mod(iter, save_iter)
+              jj = iter - save_iter + ii + mod(save_iter - mod(iter, save_iter), save_iter)
+      
+              write(iunittwo, '(e17.10)', advance='no') units_from_atomic(units_inp%time, jj * dt)
+              write(iunittwo, '(1x,e18.10E3,1x,e18.10E3)', advance='no') this%domega(ii-1), this%dq(isp, ii-1)
+              write(iunittwo, '(1x)', advance='yes')
+            end do
+   
+            call io_close(iunittwo)
+          end do
+        end if
+
+        if(this%onfly) then
+          iunitone = io_open('td.general/'//'PES_spm.total.out', action='write', position='rewind')
+          write(iunitone, '(a46)') '# frequency, total spectrum at sampling points'
+          do iom = 1, this%nomega
+            omega = iom*this%delomega
+  
+            write(iunitone, '(e17.10, 1x)', advance='no') omega 
+            do isp = 1, this%nspoints
+              write(iunitone, '(e17.10, 1x)', advance='no') spctrout(isp, iom)
+            end do
+   
+            write(iunitone, '(1x)', advance='yes')
           end do
           call io_close(iunitone)
         end if
-   
-      end do
+      end if
     end if
 
-    if(this%onfly .and. this%sphgrid) then
-      iunittwo = io_open('td.general/'//'PES_spm.distribution.out', action='write', position='rewind')
-      iunitone = io_open('td.general/'//'PES_spm.power.sum', action='write', position='rewind')
-      write(iunitone, '(a23)') '# omega, total spectrum'
-
-      select case(mdim)
-      case(1)
-        write(iunittwo, '(a40)') '# omega, distribution (left/right point)'
-
-        do iom = 1, this%nomega
-          omega = iom * this%delomega
-          write(iunittwo, '(5(1x,e18.10E3))') omega, wffttot(iom, 2), wffttot(iom, 1)
-          write(iunitone, '(2(1x,e18.10E3))') omega, sum(wffttot(iom, :)) / M_TWO
-        end do
-
-      case(2)
-        write(iunittwo, '(a26)') '# omega, phi, distribution'
-
-        do iom = 1, this%nomega
-          omega = iom * this%delomega
-
-          spctrsum = M_ZERO
-          do iph = 0, this%nstepsphi - 1
-            spctrsum = spctrsum + wffttot(iom, iph + 1) * this%nstepsphi / M_TWO / M_PI
-            phi = iph * M_TWO * M_PI / this%nstepsphi
-            write(iunittwo,'(5(1x,e18.10E3))') omega, phi, wffttot(iom, iph + 1)
-          end do
-          ! just repeat the result for output
-          write(iunittwo,'(5(1x,e18.10E3))') omega, M_TWO * M_PI, wffttot(iom, 1)
-          write(iunittwo, '(1x)', advance='yes')
-          write(iunitone, '(2(1x,e18.10E3))') omega, spctrsum
-        end do
-
-      case(3)
-        write(iunittwo, '(a33)') '# omega, theta, phi, distribution'
-
-        do iom = 1, this%nomega
-          omega = iom * this%delomega
-          isp = 0
-          spctrsum = M_ZERO
-
-          do ith = 0, this%nstepstheta
-            theta = ith * M_PI / this%nstepstheta
-
-            if(ith == 0 .or. ith == this%nstepstheta) then
-              weight = (M_ONE - cos(M_PI / this%nstepstheta / M_TWO)) * M_TWO * M_PI
-            else
-              weight = abs(cos(theta - M_PI / this%nstepstheta / M_TWO) - cos(theta + M_PI / this%nstepstheta / M_TWO)) &
-                * M_TWO * M_PI / this%nstepsphi
-            end if
-
-            do iph = 0, this%nstepsphi - 1
-              isp = isp + 1
-              spctrsum = spctrsum + wffttot(iom, isp) * weight
-
-              phi = iph * M_TWO * M_PI / this%nstepsphi
-              if(iph == 0) isp_save = isp
-              write(iunittwo,'(5(1x,e18.10E3))') omega, theta, phi, wffttot(iom, isp)
-   
-              ! just repeat the result for output
-              if(iph == (this%nstepsphi - 1)) then
-                write(iunittwo,'(5(1x,e18.10E3))') omega, theta, M_TWO * M_PI, wffttot(iom, isp_save)
-              end if
-               
-              ! just repeat the result for output
-              if(theta == M_ZERO .or. theta == M_PI) then
-                do iphi = 1, this%nstepsphi
-                  phi = iphi * M_TWO * M_PI / this%nstepsphi
-                  write(iunittwo,'(5(1x,e18.10E3))') omega, theta, phi, wffttot(iom, isp)
-                end do
-                exit
-              end if
-            end do
-
-            write(iunittwo, '(1x)', advance='yes')
-          end do
-          write(iunitone, '(2(1x,e18.10E3))') omega, spctrsum * this%delomega
-        end do
-      end select
-      call io_close(iunittwo)
-      call io_close(iunitone)
-
-    end if
-
-    SAFE_DEALLOCATE_A(wffttot)
+    SAFE_DEALLOCATE_A(spctrout)
+    SAFE_DEALLOCATE_A(spctrsum)
 
     POP_SUB(pes_spm_output)
   end subroutine pes_spm_output
@@ -641,11 +754,11 @@ contains
     type(mesh_t),    intent(in) :: mesh
     type(states_t),  intent(in) :: st
 
-    integer          :: ist, ik, isdim
-    integer          :: isp
-    FLOAT            :: xx(MAX_DIM)
-    character(len=4) :: filenr
-    integer          :: iunit
+    integer           :: ist, ik, isdim
+    integer           :: isp
+    FLOAT             :: xx(MAX_DIM)
+    character(len=80) :: filenr
+    integer           :: iunit
 
     PUSH_SUB(pes_spm_init_write)
 
@@ -653,9 +766,9 @@ contains
     if(mpi_grp_is_root(mpi_world)) then
       if(.not. this%sphgrid .or. debug%info) then   ! too much output for spherical grid
         do isp = 1, this%nspoints
-          write(filenr, '(i4.4)') isp
+          write(filenr, '(i10.10)') isp
    
-          iunit = io_open('td.general/'//'PES_spm.'//filenr//'.wavefunctions.out', action='write')
+          iunit = io_open('td.general/'//'PES_spm.'//trim(filenr)//'.wavefunctions.out', action='write')
           xx(1:mesh%sb%dim) = this%rcoords(1:mesh%sb%dim, isp)
           write(iunit,'(a1)') '#'
           write(iunit, '(a7,f17.6,a1,f17.6,a1,f17.6,5a)') &
@@ -677,7 +790,7 @@ contains
           call io_close(iunit)
    
           if(this%recipe == M_PHASE) then
-            iunit = io_open('td.general/'//'PES_spm.'//filenr//'.phase.out', action='write')
+            iunit = io_open('td.general/'//'PES_spm.'//trim(filenr)//'.phase.out', action='write')
             write(iunit,'(a24)') '# time, dq(t), dOmega(t)'
             call io_close(iunit)
           end if
@@ -792,7 +905,7 @@ contains
     integer :: isp
     integer :: il, iprev
     FLOAT   :: vp(1:MAX_DIM)
-    FLOAT   :: rr
+    FLOAT   :: rdota
 
     PUSH_SUB(pes_spm_calc_rcphase)
 
@@ -808,9 +921,8 @@ contains
     if(ii == 0) iprev = this%save_iter - 1
 
     do isp = 1, this%nspoints
-      rr = sqrt(dot_product(this%rcoords(1:mdim, isp), this%rcoords(1:mdim, isp)))
-      this%dq(isp, ii) = this%dq(isp, iprev) &
-        + dot_product(this%rcoords(1:mdim, isp), vp(1:mdim)) / (P_C * rr) * dt
+      rdota = dot_product(this%rcoords_nrm(1:mdim, isp), vp(1:mdim))
+      this%dq(isp, ii) = this%dq(isp, iprev) + rdota * dt / P_C
     end do
 
     this%domega(ii) = this%domega(iprev) &
@@ -819,7 +931,7 @@ contains
     POP_SUB(pes_spm_calc_rcphase)
   end subroutine pes_spm_calc_rcphase
 
-end module pes_spm_m
+end module pes_spm_oct_m
 
 !! Local Variables:
 !! mode: f90

@@ -15,14 +15,14 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: stencil.F90 14689 2015-10-22 20:46:45Z jrfsousa $
+!! $Id: stencil.F90 15738 2016-11-14 10:26:59Z ssato $
 
 #include "global.h"
 
-module stencil_m
-  use global_m
-  use messages_m
-  use profiling_m
+module stencil_oct_m
+  use global_oct_m
+  use messages_oct_m
+  use profiling_oct_m
 
   implicit none
 
@@ -36,10 +36,21 @@ module stencil_m
     stencil_init_center,           &
     stencil_union
 
+  type stargeneral_arms_t
+    integer          :: arms(1:3,1:3)
+    integer          :: narms  
+    integer          :: dir_min
+  end type stargeneral_arms_t
+
+
   type stencil_t
     integer          :: center
     integer          :: size
+    integer          :: npoly
     integer, pointer :: points(:, :) 
+    
+    ! The stargeneral arms
+    type(stargeneral_arms_t) :: stargeneral 
   end type stencil_t
 
 contains
@@ -50,6 +61,7 @@ contains
 
     this%center = -1
     this%size = 0
+    this%npoly = 0
     nullify(this%points)
 
   end subroutine stencil_nullify
@@ -62,6 +74,7 @@ contains
     PUSH_SUB(stencil_allocate)
 
     this%size = size
+    this%npoly = size
 
     SAFE_ALLOCATE(this%points(1:MAX_DIM, 1:size))
 
@@ -80,6 +93,7 @@ contains
     call stencil_allocate(output, input%size)
     output%points(1:MAX_DIM, 1:output%size) = input%points(1:MAX_DIM, 1:output%size)
     output%center = input%center
+    output%npoly = input%npoly
 
     POP_SUB(stencil_copy)
   end subroutine stencil_copy
@@ -139,6 +153,10 @@ contains
 
     stu%size = nstu
 
+    ! this is not defined for a union, which could be any combination. The
+    ! weights should already be known here
+    stu%npoly = -1
+
     call stencil_init_center(stu)
 
     POP_SUB(stencil_union)
@@ -162,7 +180,7 @@ contains
     POP_SUB(stencil_init_center)
   end subroutine stencil_init_center
 
-end module stencil_m
+end module stencil_oct_m
 
 !! Local Variables:
 !! mode: f90

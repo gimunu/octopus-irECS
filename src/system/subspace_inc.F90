@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: subspace_inc.F90 14914 2015-12-29 06:47:48Z xavier $
+!! $Id: subspace_inc.F90 15583 2016-08-15 13:45:41Z nicolastd $
 
 ! ---------------------------------------------------------
 !> This routine diagonalises the Hamiltonian in the subspace defined by the states.
@@ -156,12 +156,17 @@ subroutine X(subspace_diag_scalapack)(der, st, hm, ik, eigenval, psi, diff)
   R_TYPE               :: rttmp
   integer              :: ist, lwork, size
   integer :: psi_block(1:2), total_np, psi_desc(BLACS_DLEN), hs_desc(BLACS_DLEN), info
-  integer :: nbl, nrow, ncol
+  integer :: nbl, nrow, ncol, ip, idim
   type(batch_t) :: psib, hpsib
 #ifdef R_TCOMPLEX
   integer :: lrwork
   CMPLX, allocatable :: rwork(:)
   CMPLX :: ftmp
+#endif
+  type(profile_t), save :: prof_diag, prof_gemm1, prof_gemm2
+#ifdef HAVE_ELPA
+  integer :: rcomm, ccomm
+  logical :: elpa_success
 #endif
 
   PUSH_SUB(X(subspace_diag_scalapack))
@@ -217,6 +222,8 @@ subroutine X(subspace_diag_scalapack)(der, st, hm, ik, eigenval, psi, diff)
     hpsi(der%mesh%np + 1:der%mesh%np_part, 1:st%d%dim, st%st_start:st%st_end) = M_ZERO
   end if
   
+  call profiling_in(prof_gemm1, "SCALAPACK_GEMM1")
+
   ! get the matrix <psi|H|psi> = <psi|hpsi>
   call pblas_gemm('c', 'n', st%nst, st%nst, total_np, &
     R_TOTYPE(der%mesh%vol_pp(1)), psi(1, 1, st%st_start), 1, 1, psi_desc(1), &
@@ -224,6 +231,9 @@ subroutine X(subspace_diag_scalapack)(der, st, hm, ik, eigenval, psi, diff)
     R_TOTYPE(M_ZERO), hs(1, 1), 1, 1, hs_desc(1))
 
   SAFE_ALLOCATE(evectors(1:nrow, 1:ncol))
+  call profiling_out(prof_gemm1)
+
+  call profiling_in(prof_diag, "SCALAPACK_DIAG")
 
   ! now diagonalize
 #ifdef R_TCOMPLEX
@@ -257,6 +267,26 @@ subroutine X(subspace_diag_scalapack)(der, st, hm, ik, eigenval, psi, diff)
 
 #else
 
+#ifdef HAVE_ELPA
+  
+  mpi_err = get_elpa_communicators(st%dom_st_mpi_grp%comm, st%dom_st_proc_grid%myrow, st%dom_st_proc_grid%mycol, rcomm, ccomm)
+
+  if(.false.) then
+
+    elpa_success = solve_evp_real_1stage(na = st%nst, nev = st%nst, a = hs, &
+      lda = ubound(hs, dim = 1), ev = eigenval, q = evectors, ldq = ubound(evectors, dim = 1), &
+      nblk = nbl, matrixCols = ubound(hs, dim = 2), mpi_comm_rows = rcomm, mpi_comm_cols = ccomm)
+  else
+    
+    elpa_success = solve_evp_real_2stage(na = st%nst, nev = st%nst, a = hs, &
+      lda = ubound(hs, dim = 1), ev = eigenval, q = evectors, ldq = ubound(evectors, dim = 1), &
+      nblk = nbl, matrixCols = ubound(hs, dim = 2), &
+      mpi_comm_rows = rcomm, mpi_comm_cols = ccomm, mpi_comm_all = st%dom_st_mpi_grp%comm)
+
+  end if
+  
+#else
+
   call pdsyev(jobz = 'V', uplo = 'U', n = st%nst, a = hs(1, 1) , ia = 1, ja = 1, desca = hs_desc(1), &
     w = eigenval(1), z = evectors(1, 1), iz = 1, jz = 1, descz = hs_desc(1), work = rttmp, lwork = -1, info = info)
 
@@ -277,17 +307,32 @@ subroutine X(subspace_diag_scalapack)(der, st, hm, ik, eigenval, psi, diff)
   end if
   
   SAFE_DEALLOCATE_A(work)
-
 #endif
+  
+#endif
+
+  call profiling_out(prof_diag)
 
   SAFE_DEALLOCATE_A(hs)
 
-  hpsi(1:der%mesh%np, 1:st%d%dim,  st%st_start:st%st_end) = psi(1:der%mesh%np, 1:st%d%dim, st%st_start:st%st_end)
+  !$omp parallel private(ist, idim, ip)
+  do ist = st%st_start, st%st_end
+    do idim = 1, st%d%dim
+      !$omp do
+      do ip = 1, der%mesh%np
+        hpsi(ip, idim, ist) = psi(ip, idim, ist)
+      end do
+      !$omp end do nowait
+    end do
+  end do
+  !$omp end parallel
 
+  call profiling_in(prof_gemm2, "SCALAPACK_GEMM2")
   call pblas_gemm('n', 'n', total_np, st%nst, st%nst, &
     R_TOTYPE(M_ONE), hpsi(1, 1, st%st_start), 1, 1, psi_desc(1), &
     evectors(1, 1), 1, 1, hs_desc(1), &
     R_TOTYPE(M_ZERO), psi(1, 1, st%st_start), 1, 1, psi_desc(1))
+  call profiling_out(prof_gemm2)
 
   ! Recalculate the residues if requested by the diff argument.
   if(present(diff)) then 
@@ -319,9 +364,7 @@ subroutine X(subspace_diag_hamiltonian)(der, st, hm, ik, hmss)
   R_TYPE, allocatable :: psi(:, :, :), hpsi(:, :, :)
   type(batch_t), allocatable :: hpsib(:)
   integer :: sp, ep, size, block_size, ierr
-#ifdef HAVE_CLAMDBLAS
-  type(opencl_mem_t) :: psi_buffer, hpsi_buffer, hmss_buffer
-#endif
+  type(accel_mem_t) :: psi_buffer, hpsi_buffer, hmss_buffer
 
   PUSH_SUB(X(subspace_diag_hamiltonian))
   call profiling_in(hamiltonian_prof, "SUBSPACE_HAMILTONIAN")
@@ -333,39 +376,36 @@ subroutine X(subspace_diag_hamiltonian)(der, st, hm, ik, hmss)
     call X(hamiltonian_apply_batch)(hm, der, st%group%psib(ib, ik), hpsib(ib), ik)
   end do
   
-  if(states_are_packed(st) .and. opencl_is_enabled()) then
+  if(states_are_packed(st) .and. accel_is_enabled()) then
 
     ASSERT(ubound(hmss, dim = 1) == st%nst)
 
-#ifdef HAVE_CLAMDBLAS
-    call opencl_create_buffer(hmss_buffer, CL_MEM_READ_WRITE, R_TYPE_VAL, st%nst*st%nst)
-    call opencl_set_buffer_to_zero(hmss_buffer, R_TYPE_VAL, st%nst*st%nst)
+    call accel_create_buffer(hmss_buffer, ACCEL_MEM_READ_WRITE, R_TYPE_VAL, st%nst*st%nst)
+    call accel_set_buffer_to_zero(hmss_buffer, R_TYPE_VAL, st%nst*st%nst)
 
     if(.not. st%parallel_in_states .and. st%group%block_start == st%group%block_end) then
       ! all the states are stored in one block
       ! we can use blas directly
-      
-      call aX(clAmdblas,gemmEx)(order = clAmdBlasColumnMajor, transA = clAmdBlasNoTrans, transB = clAmdBlasConjTrans, &
+
+      call X(accel_gemm)(transA = ACCEL_BLAS_N, transB = ACCEL_BLAS_C, &
         M = int(st%nst, 8), N = int(st%nst, 8), K = int(der%mesh%np, 8), &
         alpha = R_TOTYPE(der%mesh%volume_element), &
-        A = st%group%psib(st%group%block_start, ik)%pack%buffer%mem, offA = 0_8, &
+        A = st%group%psib(st%group%block_start, ik)%pack%buffer, offA = 0_8, &
         lda = int(st%group%psib(st%group%block_start, ik)%pack%size(1), 8), &
-        B = hpsib(st%group%block_start)%pack%buffer%mem, offB = 0_8, &
+        B = hpsib(st%group%block_start)%pack%buffer, offB = 0_8, &
         ldb = int(hpsib(st%group%block_start)%pack%size(1), 8), &
         beta = R_TOTYPE(CNST(0.0)), &
-        C = hmss_buffer%mem, offC = 0_8, ldc = int(st%nst, 8), &
-        CommandQueue = opencl%command_queue, status = ierr)
-      if(ierr /= clAmdBlasSuccess) call clblas_print_error(ierr, 'clAmdBlasXgemmEx')
+        C = hmss_buffer, offC = 0_8, ldc = int(st%nst, 8))
 
     else
 
       ASSERT(.not. st%parallel_in_states)
-
+      
       ! we have to copy the blocks to a temporary array
       block_size = batch_points_block_size(st%group%psib(st%group%block_start, ik))
 
-      call opencl_create_buffer(psi_buffer, CL_MEM_READ_WRITE, R_TYPE_VAL, st%nst*block_size)
-      call opencl_create_buffer(hpsi_buffer, CL_MEM_READ_WRITE, R_TYPE_VAL, st%nst*block_size)
+      call accel_create_buffer(psi_buffer, ACCEL_MEM_READ_WRITE, R_TYPE_VAL, st%nst*block_size)
+      call accel_create_buffer(hpsi_buffer, ACCEL_MEM_READ_WRITE, R_TYPE_VAL, st%nst*block_size)
 
       do sp = 1, der%mesh%np, block_size
         size = min(block_size, der%mesh%np - sp + 1)
@@ -376,28 +416,25 @@ subroutine X(subspace_diag_hamiltonian)(der, st, hm, ik, hmss)
           call batch_get_points(hpsib(ib), sp, sp + size - 1, hpsi_buffer, st%nst)
         end do
 
-        call aX(clAmdblas,gemmEx)(order = clAmdBlasColumnMajor, transA = clAmdBlasNoTrans, transB = clAmdBlasConjTrans, &
+        call X(accel_gemm)(transA = ACCEL_BLAS_N, transB = ACCEL_BLAS_C, &
           M = int(st%nst, 8), N = int(st%nst, 8), K = int(size, 8), &
           alpha = R_TOTYPE(der%mesh%volume_element), &
-          A = psi_buffer%mem, offA = 0_8, lda = int(st%nst, 8), &
-          B = hpsi_buffer%mem, offB = 0_8, ldb = int(st%nst, 8), beta = R_TOTYPE(CNST(1.0)), & 
-          C = hmss_buffer%mem, offC = 0_8, ldc = int(st%nst, 8), &
-          CommandQueue = opencl%command_queue, status = ierr)
-        if(ierr /= clAmdBlasSuccess) call clblas_print_error(ierr, 'clAmdBlasXgemmEx')
-
-        call opencl_finish()
+          A = psi_buffer, offA = 0_8, lda = int(st%nst, 8), &
+          B = hpsi_buffer, offB = 0_8, ldb = int(st%nst, 8), beta = R_TOTYPE(CNST(1.0)), & 
+          C = hmss_buffer, offC = 0_8, ldc = int(st%nst, 8))
+        
+        call accel_finish()
 
       end do
 
 
-      call opencl_release_buffer(psi_buffer)
-      call opencl_release_buffer(hpsi_buffer)
+      call accel_release_buffer(psi_buffer)
+      call accel_release_buffer(hpsi_buffer)
       
     end if
 
-    call opencl_read_buffer(hmss_buffer, st%nst*st%nst, hmss)
-    call opencl_release_buffer(hmss_buffer)
-#endif
+    call accel_read_buffer(hmss_buffer, st%nst*st%nst, hmss)
+    call accel_release_buffer(hmss_buffer)
 
   else
 
@@ -445,7 +482,7 @@ subroutine X(subspace_diag_hamiltonian)(der, st, hm, ik, hmss)
 #endif
 
   end if
-
+  
   call profiling_count_operations((R_ADD + R_MUL)*st%nst*(st%nst - CNST(1.0))*der%mesh%np)
   
   do ib = st%group%block_start, st%group%block_end
@@ -460,6 +497,7 @@ subroutine X(subspace_diag_hamiltonian)(der, st, hm, ik, hmss)
   POP_SUB(X(subspace_diag_hamiltonian))
 
 end subroutine X(subspace_diag_hamiltonian)
+
 
 !! Local Variables:
 !! mode: f90

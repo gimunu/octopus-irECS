@@ -15,52 +15,52 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: v_ks.F90 14990 2016-01-06 20:25:42Z jrfsousa $
+!! $Id: v_ks.F90 15698 2016-10-28 12:49:03Z nicolastd $
 
 #include "global.h"
  
-module v_ks_m
-  use base_hamiltonian_m
-  use base_states_m
-  use berry_m
-  use current_m
-  use density_m
-  use derivatives_m
-  use energy_m
-  use energy_calc_m
-  use epot_m 
-  use geometry_m
-  use global_m
-  use grid_m
-  use hamiltonian_m
-  use index_m
-  use io_function_m
-  use lalg_basic_m
-  use libvdwxc_m
-  use magnetic_m
-  use mesh_function_m
-  use messages_m
-  use mpi_m
-  use multicomm_m
-  use multigrid_m
-  use parser_m
-  use poisson_m
-  use profiling_m
-  use pcm_m 
-  use simul_box_m
-  use ssys_states_m
-  use ssys_tnadd_m
-  use states_m
-  use states_dim_m
-  use states_parallel_m
-  use unit_system_m
-  use varinfo_m
-  use vdw_ts_m
-  use xc_m
+module v_ks_oct_m
+  use base_hamiltonian_oct_m
+  use base_states_oct_m
+  use berry_oct_m
+  use current_oct_m
+  use density_oct_m
+  use derivatives_oct_m
+  use energy_oct_m
+  use energy_calc_oct_m
+  use epot_oct_m 
+  use geometry_oct_m
+  use global_oct_m
+  use grid_oct_m
+  use hamiltonian_oct_m
+  use index_oct_m
+  use io_function_oct_m
+  use lalg_basic_oct_m
+  use libvdwxc_oct_m
+  use magnetic_oct_m
+  use mesh_function_oct_m
+  use messages_oct_m
+  use mpi_oct_m
+  use multicomm_oct_m
+  use multigrid_oct_m
+  use parser_oct_m
+  use poisson_oct_m
+  use profiling_oct_m
+  use pcm_oct_m 
+  use simul_box_oct_m
+  use ssys_states_oct_m
+  use ssys_tnadd_oct_m
+  use states_oct_m
+  use states_dim_oct_m
+  use states_parallel_oct_m
+  use unit_system_oct_m
+  use varinfo_oct_m
+  use vdw_ts_oct_m
+  use xc_oct_m
   use XC_F90(lib_m)
-  use xc_functl_m
-  use xc_ks_inversion_m
-  use xc_OEP_m
+  use xc_functl_oct_m
+  use xc_ks_inversion_oct_m
+  use xc_OEP_oct_m
 
   implicit none
 
@@ -75,7 +75,7 @@ module v_ks_m
     v_ks_calc_start,    &
     v_ks_calc_finish,   &
     v_ks_freeze_hxc,    &
-    v_ks_calculate_current
+    v_ks_calculate_current 
 
   integer, parameter, public :: &
     SIC_NONE   = 1,     &  !< no self-interaction correction
@@ -132,6 +132,7 @@ module v_ks_m
     integer                  :: vdw_correction
     logical                  :: vdw_self_consistent
     type(vdw_ts_t)           :: vdw_ts
+    logical                  :: include_td_field
   end type v_ks_t
 
 contains
@@ -487,7 +488,7 @@ contains
 
 
   ! ---------------------------------------------------------
-  subroutine v_ks_calc(ks, hm, st, geo, calc_eigenval, time, calc_berry, calc_energy)
+  subroutine v_ks_calc(ks, hm, st, geo, calc_eigenval, time, calc_berry, calc_energy, calc_current)
     type(v_ks_t),               intent(inout) :: ks
     type(hamiltonian_t),        intent(inout) :: hm
     type(states_t),             intent(inout) :: st
@@ -496,10 +497,15 @@ contains
     FLOAT,            optional, intent(in)    :: time
     logical,          optional, intent(in)    :: calc_berry !< use this before wfns initialized
     logical,          optional, intent(in)    :: calc_energy
+    logical,          optional, intent(in)    :: calc_current
+
+    logical :: calc_current_
 
     PUSH_SUB(v_ks_calc)
 
-    call v_ks_calc_start(ks, hm, st, geo, time, calc_berry, calc_energy)
+    calc_current_ = optional_default(calc_current, .true.)
+
+    call v_ks_calc_start(ks, hm, st, geo, time, calc_berry, calc_energy, calc_current_)
     call v_ks_calc_finish(ks, hm)
 
     if(optional_default(calc_eigenval, .false.)) then
@@ -515,7 +521,7 @@ contains
   !! potential. The routine v_ks_calc_finish must be called to finish
   !! the calculation. The argument hm is not modified. The argument st
   !! can be modified after the function have been used.
-  subroutine v_ks_calc_start(ks, hm, st, geo, time, calc_berry, calc_energy) 
+  subroutine v_ks_calc_start(ks, hm, st, geo, time, calc_berry, calc_energy, calc_current) 
     type(v_ks_t),            target,   intent(inout) :: ks 
     type(hamiltonian_t),     target,   intent(in)    :: hm !< This MUST be intent(in), changes to hm are done in v_ks_calc_finish.
     type(states_t),                    intent(inout) :: st
@@ -523,11 +529,16 @@ contains
     FLOAT,                   optional, intent(in)    :: time 
     logical,                 optional, intent(in)    :: calc_berry !< Use this before wfns initialized.
     logical,                 optional, intent(in)    :: calc_energy
+    logical,                 optional, intent(in)    :: calc_current
 
     type(profile_t), save :: prof
     logical :: cmplxscl
+    logical :: calc_current_
 
     PUSH_SUB(v_ks_calc_start)
+
+    calc_current_ = optional_default(calc_current, .true.)
+
     call profiling_in(prof, "KOHN_SHAM_CALC")
     cmplxscl = hm%cmplxscl%space
 
@@ -541,11 +552,12 @@ contains
       call messages_info(1)
     end if
 
+    ks%calc%time_present = present(time) 
+
     if(present(time)) then
       ks%calc%time = time
-    else
-      ks%calc%time = M_ZERO
     end if
+
     ks%calc%calc_energy = optional_default(calc_energy, .true.)
 
     nullify(ks%calc%vberry)
@@ -564,7 +576,7 @@ contains
 
     ! If the Hxc term is frozen, there is nothing more to do (WARNING: MISSING ks%calc%energy%intnvxc)
     if(ks%frozen_hxc) then      
-      if(ks%calculate_current) then
+      if(ks%calculate_current .and. calc_current_ ) then
         call states_allocate_current(st, ks%gr)
         call current_calculate(ks%current_calculator, ks%gr%der, hm, geo, st, st%current)
       end if      
@@ -608,7 +620,7 @@ contains
       ks%calc%total_density_alloc = .false.
     end if
 
-    if(ks%calculate_current) then
+    if(ks%calculate_current .and. calc_current_ ) then
       call states_allocate_current(st, ks%gr)
       call current_calculate(ks%current_calculator, ks%gr%der, hm, geo, st, st%current)
     end if
@@ -696,13 +708,9 @@ contains
       logical, intent(in)                :: cmplxscl
       type(hamiltonian_t), intent(in)    :: hm
 
-      integer        :: ip, ispin, ist, ik, ib
+      integer        :: ip, ispin, ist, ik
       FLOAT, pointer :: vxc_sic(:,:),  Imvxc_sic(:, :), vh_sic(:), rho(:, :), Imrho(:, :), qsp(:)
       CMPLX, pointer :: zrho_total(:), zvh_sic(:)
-      type(density_calc_t) :: dens_calc
-        
-      character(len=80) :: filename
-      integer :: ierr  
       
       PUSH_SUB(add_adsic)
       
@@ -722,87 +730,13 @@ contains
       vh_sic = M_ZERO
       qsp = M_ZERO
       do ist = 1, st%nst
-        qsp(:) = qsp(:)+ st%occ(ist, :) * st%d%kweights(:)
+        do ispin = 1,st%d%nspin
+          do ik = ispin, st%d%nik, st%d%nspin
+           qsp(ispin) = qsp(ispin)+ st%occ(ist, ik) * st%d%kweights(ik) 
+          enddo
+        enddo
       end do
-      
-      if(simul_box_is_periodic(ks%gr%mesh%sb)) then
-        ! Calculate the correction using the k-dependent density
-        ! in each kpoint subsbace
-        call density_calc_init(dens_calc, st, ks%gr, rho)
 
-        do ik = st%d%kpt%start, st%d%kpt%end
-
-          rho(:,:) = M_ZERO
-          qsp = M_ZERO
-          
-          do ist = 1, st%nst
-            qsp(1) = qsp(1)+ st%occ(ist, ik) 
-          end do
-          print *, "qsp(1)= ", qsp(1),  "st%d%kweights(ik)", st%d%kweights(ik), "st%qtot ", st%qtot
-
-          
-          
-          do ib = st%group%block_start, st%group%block_end
-              call density_calc_accumulate(dens_calc, ik, st%group%psib(ib, ik))
-          end do
-
-
-          select case (st%d%ispin)
-          case (UNPOLARIZED, SPIN_POLARIZED)
-            ispin = states_dim_get_spin_index(st%d, ik)
-!             do ispin = 1, st%d%nspin
-!               if (qsp(ispin) == M_ZERO) cycle
-
-
-              vxc_sic = M_ZERO
-
-              rho(:, ispin) = rho(:, ispin) / qsp(1) * st%d%kweights(ik)
-              call xc_get_vxc(ks%gr%fine%der, ks%xc, &
-                   st, rho, st%d%ispin, -minval(st%eigenval(st%nst,:)), qsp(1), &
-                   vxc_sic)
-
-              ks%calc%vxc = ks%calc%vxc - vxc_sic* st%d%kweights(ik)
-
-              write(filename,'(i4.4)') ik
-              filename = trim("vxc_sic_ik")//filename
-              call dio_function_output(io_function_fill_how("AxisZ"), &
-                                      ".", filename,  ks%gr%mesh, rho(:,1), unit_one, ierr)
-
-!             end do
-
-          case (SPINORS)
-            !TODO
-          end select
-
-          vh_sic = M_ZERO
-!         forall(ip = 1:ks%gr%mesh%np) rho(ip, 1) = sum(rho(ip, 1:st%d%nspin))  ! spinless density
-          
-          write(filename,'(i4.4)') ik
-          filename = trim("rho_ik")//filename
-          call dio_function_output(io_function_fill_how("AxisZ"), &
-                                  ".", filename,  ks%gr%mesh, rho(:,1), unit_one, ierr)
-                                  
-          call dpoisson_solve(ks%hartree_solver, vh_sic, rho(:,1))
-
-          write(filename,'(i4.4)') ik
-          filename = trim("vh_ik")//filename
-          call dio_function_output(io_function_fill_how("AxisZ"), &
-                                  ".", filename,  ks%gr%mesh, rho(:,1), unit_one, ierr)
-
-    
-          forall(ip = 1:ks%gr%mesh%np) ks%calc%vxc(ip,:) = ks%calc%vxc(ip,:) - vh_sic(ip)* st%d%kweights(ik)
-
-        end do
-
-        call dio_function_output(io_function_fill_how("AxisZ"), &
-                                ".", "vxc",  ks%gr%mesh, ks%calc%vxc(:,1), unit_one, ierr)
-
-
-        call density_calc_end(dens_calc)
-
-
-      else
-        
       if(cmplxscl) then
         if (st%d%ispin /= UNPOLARIZED) then
           call messages_not_implemented('ADSIC with spin-polarization and complex scaling')
@@ -813,7 +747,7 @@ contains
         SAFE_ALLOCATE(Imrho(1:ks%gr%fine%mesh%np, 1:st%d%nspin))
         SAFE_ALLOCATE(Imvxc_sic(1:ks%gr%mesh%np, 1:st%d%nspin))
         SAFE_ALLOCATE(zvh_sic(1:ks%gr%mesh%np))
-      
+        
         do ispin = 1, st%d%nspin
           Imrho(:, ispin) = ks%calc%Imdensity(:, ispin) / qsp(ispin)
         end do
@@ -852,6 +786,7 @@ contains
             vxc_sic = M_ZERO
 
             rho(:, ispin) = ks%calc%density(:, ispin) / qsp(ispin)
+            ! TODO : check for solid:   -minval(st%eigenval(st%nst,:))
             call xc_get_vxc(ks%gr%fine%der, ks%xc, &
                  st, rho, st%d%ispin, -minval(st%eigenval(st%nst,:)), qsp(ispin), &
                  vxc_sic)
@@ -866,8 +801,6 @@ contains
         rho(:, 1) = ks%calc%total_density / st%qtot
         call dpoisson_solve(ks%hartree_solver, vh_sic, rho(:,1))
         forall(ip = 1:ks%gr%mesh%np) ks%calc%vxc(ip,:) = ks%calc%vxc(ip,:) - vh_sic(ip)
-      end if
-      
       end if
 
       SAFE_DEALLOCATE_P(vxc_sic)
@@ -1219,7 +1152,11 @@ contains
       hm%ep%vdw_forces(1:ks%gr%sb%dim, 1:ks%calc%geo%natoms) = CNST(0.0)      
     end if
 
-    call hamiltonian_update(hm, ks%gr%mesh, time = ks%calc%time)
+    if(ks%calc%time_present) then
+      call hamiltonian_update(hm, ks%gr%mesh, time = ks%calc%time)
+    else
+      call hamiltonian_update(hm, ks%gr%mesh)
+    end if
 
     SAFE_DEALLOCATE_P(ks%calc%density)
     SAFE_DEALLOCATE_P(ks%calc%Imdensity)
@@ -1274,10 +1211,9 @@ contains
         call dpoisson_solve(ks%hartree_solver, pot, ks%calc%total_density)
       else
         ! Solve the Poisson equation for the scaled density and coulomb potential
-        call zpoisson_solve(ks%hartree_solver, zpot,&
-          ks%calc%total_density + M_zI * ks%calc%Imtotal_density)
-        pot   =   real(zpot)
-        Impot =  aimag(zpot)
+        call zpoisson_solve(ks%hartree_solver, zpot, ks%calc%total_density + M_zI*ks%calc%Imtotal_density)
+        pot(1:ks%gr%fine%mesh%np) = real(zpot(1:ks%gr%fine%mesh%np))
+        Impot(1:ks%gr%fine%mesh%np) = aimag(zpot(1:ks%gr%fine%mesh%np))
       end if
     else
       ! The calculation was started by v_ks_calc_start.
@@ -1285,18 +1221,16 @@ contains
         call dpoisson_solve_finish(ks%hartree_solver, pot)
       else
         call zpoisson_solve_finish(ks%hartree_solver, zpot)
-        pot   =   real(zpot)
-        Impot =  aimag(zpot)
+        pot(1:ks%gr%fine%mesh%np) = real(zpot(1:ks%gr%fine%mesh%np))
+        Impot(1:ks%gr%fine%mesh%np) =  aimag(zpot(1:ks%gr%fine%mesh%np))
       end if
     end if
 
     !> PCM reaction field due to the electronic density
-    if (hm%pcm%run_pcm) then
+    if (hm%pcm%run_pcm .and. pcm_update(hm%pcm,hm%current_time)) then
     !> Generates the real-space PCM potential due to electrons during the SCF calculation.
-        call pcm_v_electrons_cav_li(hm%pcm%v_e, pot, hm%pcm)
-        call pcm_charges(hm%pcm%q_e, hm%pcm%qtot_e, hm%pcm%v_e, hm%pcm%matrix, hm%pcm%n_tesserae) 
-        call pcm_pot_rs( hm%pcm%v_e_rs, hm%pcm%q_e, hm%pcm%tess, hm%pcm%n_tesserae, ks%gr%mesh, hm%pcm%gaussian_width )
-
+        call pcm_calc_pot_rs(hm%pcm, ks%gr%mesh, v_h = pot)
+        
         ! Calculating the PCM term renormalizing the sum of the single-particle energies
         hm%energy%pcm_corr = dmf_dotp( ks%gr%fine%mesh, ks%calc%total_density, hm%pcm%v_e_rs + hm%pcm%v_n_rs )
     end if
@@ -1363,8 +1297,8 @@ contains
 
     POP_SUB(v_ks_calculate_current)
   end subroutine v_ks_calculate_current
-  
-end module v_ks_m
+ 
+end module v_ks_oct_m
 
 !! Local Variables:
 !! mode: f90

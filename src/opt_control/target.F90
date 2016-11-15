@@ -15,51 +15,51 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: target.F90 14923 2015-12-30 01:34:01Z xavier $
+!! $Id: target.F90 15203 2016-03-19 13:15:05Z xavier $
 
 #include "global.h"
 
-module target_m
-  use batch_m
-  use batch_ops_m
-  use density_m
-  use derivatives_m
-  use epot_m
-  use excited_states_m
-  use fft_m
-  use forces_m
-  use geometry_m
-  use global_m
-  use grid_m
-  use hamiltonian_m
-  use io_m
-  use io_function_m
-  use ion_dynamics_m
-  use lalg_adv_m
-  use lalg_basic_m
-  use loct_m
-  use mesh_m
-  use mesh_function_m
-  use messages_m
-  use opt_control_global_m
-  use opt_control_state_m
-  use output_m
-  use parser_m
-  use profiling_m
-  use restart_m
-  use species_m
-  use spectrum_m
-  use states_m
-  use states_calc_m
-  use states_dim_m
-  use states_restart_m
-  use string_m
-  use td_calc_m
-  use td_m
-  use types_m
-  use unit_m
-  use unit_system_m
-  use varinfo_m
+module target_oct_m
+  use batch_oct_m
+  use batch_ops_oct_m
+  use density_oct_m
+  use derivatives_oct_m
+  use epot_oct_m
+  use excited_states_oct_m
+  use fft_oct_m
+  use forces_oct_m
+  use geometry_oct_m
+  use global_oct_m
+  use grid_oct_m
+  use hamiltonian_oct_m
+  use io_oct_m
+  use io_function_oct_m
+  use ion_dynamics_oct_m
+  use lalg_adv_oct_m
+  use lalg_basic_oct_m
+  use loct_oct_m
+  use mesh_oct_m
+  use mesh_function_oct_m
+  use messages_oct_m
+  use opt_control_global_oct_m
+  use opt_control_state_oct_m
+  use output_oct_m
+  use parser_oct_m
+  use profiling_oct_m
+  use restart_oct_m
+  use species_oct_m
+  use spectrum_oct_m
+  use states_oct_m
+  use states_calc_oct_m
+  use states_dim_oct_m
+  use states_restart_oct_m
+  use string_oct_m
+  use td_calc_oct_m
+  use td_oct_m
+  use types_oct_m
+  use unit_oct_m
+  use unit_system_oct_m
+  use varinfo_oct_m
 
   implicit none
 
@@ -606,12 +606,6 @@ contains
       call target_chi_excited(tg, gr, psi_in, chi_out)
     case(oct_tg_gstransformation)
       call target_chi_gstransformation(tg, gr, psi_in, chi_out)
-      q => opt_control_point_q(qcchi_out)
-      p => opt_control_point_p(qcchi_out)
-      q = M_ZERO
-      p = M_ZERO
-      nullify(q)
-      nullify(p)
     case(oct_tg_userdefined)
       call target_chi_userdefined(tg, gr, psi_in, chi_out)
     case(oct_tg_jdensity)
@@ -633,6 +627,16 @@ contains
     case(oct_tg_spin)
       call target_chi_spin(tg, gr, psi_in, chi_out)
     end select
+
+    ! Unless the target is "classical", the co-state classical variables are zero at time t=T.
+    if(tg%type .ne. oct_tg_classical ) then
+      q => opt_control_point_q(qcchi_out)
+      p => opt_control_point_p(qcchi_out)
+      q = M_ZERO
+      p = M_ZERO
+      nullify(q)
+      nullify(p)
+    end if
 
     nullify(psi_in)
     nullify(chi_out)
@@ -705,7 +709,7 @@ contains
 #include "target_classical_inc.F90"
 #include "target_spin_inc.F90"
 
-end module target_m
+end module target_oct_m
 
 !! Local Variables:
 !! mode: f90

@@ -15,50 +15,51 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: pes_mask.F90 15009 2016-01-08 09:32:49Z umberto $
+!! $Id: pes_mask.F90 15351 2016-05-11 09:17:22Z umberto $
 
 #include "global.h"
 
-module pes_mask_m
-  use batch_m
-  use comm_m
-  use cube_function_m
-  use cube_m
-  use density_m
-  use fft_m
-  use fourier_space_m
-  use geometry_m
-  use global_m
-  use grid_m
-  use hamiltonian_m
-  use io_binary_m
-  use io_function_m
-  use io_m
-  use kpoints_m
-  use lasers_m
-  use loct_m
-  use math_m
-  use mesh_cube_parallel_map_m
-  use mesh_m
-  use messages_m
-  use mpi_m
+module pes_mask_oct_m
+  use batch_oct_m
+  use boundary_op_oct_m
+  use comm_oct_m
+  use cube_function_oct_m
+  use cube_oct_m
+  use density_oct_m
+  use fft_oct_m
+  use fourier_space_oct_m
+  use geometry_oct_m
+  use global_oct_m
+  use grid_oct_m
+  use hamiltonian_oct_m
+  use io_binary_oct_m
+  use io_function_oct_m
+  use io_oct_m
+  use kpoints_oct_m
+  use lasers_oct_m
+  use loct_oct_m
+  use math_oct_m
+  use mesh_cube_parallel_map_oct_m
+  use mesh_oct_m
+  use messages_oct_m
+  use mpi_oct_m
 #if defined(HAVE_NETCDF)
   use netcdf
 #endif  
-  use output_m
-  use parser_m
-  use profiling_m
-  use qshep_m
-  use restart_m
-  use simul_box_m
-  use sort_om
-  use states_dim_m
-  use states_m
-  use string_m
-  use unit_m
-  use unit_system_m
-  use varinfo_m
-  use vtk_m
+  use output_oct_m
+  use parser_oct_m
+  use profiling_oct_m
+  use qshep_oct_m
+  use restart_oct_m
+  use simul_box_oct_m
+  use sort_oct_m
+  use states_dim_oct_m
+  use states_oct_m
+  use string_oct_m
+  use unit_oct_m
+  use unit_system_oct_m
+  use varinfo_oct_m
+  use vtk_oct_m
   
   implicit none
 
@@ -213,7 +214,7 @@ contains
       call messages_warning(2)
     end if
 
-    if( hm%ab  /=  NOT_ABSORBING) then
+    if(hm%bc%abtype /= NOT_ABSORBING) then
       message(1) = 'PhotoElectronSpectrum = pes_mask already contains absorbing boundaries.'
       message(2) = 'Set AbsorbingBoundaries = no and rerun.'
       call messages_fatal(2)
@@ -540,7 +541,7 @@ contains
     
     
     ! generate the map between mesh and cube
-    call  pes_mask_generate_Lk(mask) ! generate the physical momentum vector
+    call  pes_mask_generate_Lk(mask, sb) ! generate the physical momentum vector
     
     
     
@@ -802,36 +803,20 @@ contains
   
 
   ! --------------------------------------------------------
-  subroutine pes_mask_generate_Lk(mask)
-    type(pes_mask_t), intent(inout) :: mask
+  subroutine pes_mask_generate_Lk(mask, sb)
+    type(pes_mask_t),  intent(inout) :: mask
+    type(simul_box_t),   intent(in)  :: sb
 
     integer :: ii,nn(3),dim
     FLOAT   :: temp
 
     PUSH_SUB(pes_mask_generate_Lk)
-    
-    mask%Lk(:,1:mask%mesh%sb%dim)= mask%cube%Lfs(:,1:mask%mesh%sb%dim)
 
-!     do ii=1, maxval(mask%ll(:))
-!        print *,ii, mask%Lk(ii,1), mask%Lk(ii,2)
-!     end do
+    dim = mask%mesh%sb%dim
     
-!     dim = mesh%sb%dim
-!     temp = M_TWO * M_PI / (mask%fs_n_global(1) * mask%spacing(1))
-!     nn(1:dim) = mask%fs_n_global(1:dim)
-!
-!     do ii = 1, mask%fs_n_global(1)
-!
-!       if (mask%pw_map_how  ==   PW_MAP_NFFT) then
-!         !The Fourier space is shrunk by the factor mask%enlarge_2p
-! !HH FIXME this factor is wrong for non-cubic enlargement
-!         mask%Lk(ii,1:mesh%sb%dim) = (ii - nn/2 - 1)* &
-!                                   temp/(mask%enlarge_2p(1:mesh%sb%dim))
-!       else
-!         mask%Lk(ii) = pad_feq(ii,nn, .true.) * temp
-!       end if
-!
-!     end do
+    do ii=1, maxval(mask%ll(:))    
+      mask%Lk(ii,1:dim)= matmul(sb%klattice_primitive(1:dim,1:dim), mask%cube%Lfs(ii,1:dim))
+    end do
 
     POP_SUB(pes_mask_generate_Lk)
   end subroutine pes_mask_generate_Lk
@@ -1455,7 +1440,7 @@ contains
   
 #include "pes_mask_out_inc.F90"
   
-end module pes_mask_m
+end module pes_mask_oct_m
 
 !! Local Variables:
 !! mode: f90

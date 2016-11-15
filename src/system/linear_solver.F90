@@ -15,46 +15,36 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: linear_solver.F90 14221 2015-06-05 16:37:56Z xavier $
+!! $Id: linear_solver.F90 15203 2016-03-19 13:15:05Z xavier $
 
 #include "global.h"
 
-module linear_solver_m
-  use batch_m
-  use batch_ops_m
-  use derivatives_m
-  use global_m
-  use grid_m
-  use hamiltonian_m
-  use lalg_basic_m
-  use linear_response_m
-  use loct_m
-  use parser_m
-  use math_m
-  use mesh_m
-  use mesh_batch_m
-  use mesh_function_m
-  use messages_m
-  use profiling_m
-  use preconditioners_m
-  use scf_tol_m
-  use smear_m
-  use solvers_m
-  use states_m
+module linear_solver_oct_m
+  use batch_oct_m
+  use batch_ops_oct_m
+  use derivatives_oct_m
+  use global_oct_m
+  use grid_oct_m
+  use hamiltonian_oct_m
+  use lalg_basic_oct_m
+  use linear_response_oct_m
+  use loct_oct_m
+  use parser_oct_m
+  use math_oct_m
+  use mesh_oct_m
+  use mesh_batch_oct_m
+  use mesh_function_oct_m
+  use messages_oct_m
+  use profiling_oct_m
+  use preconditioners_oct_m
+  use scf_tol_oct_m
+  use smear_oct_m
+  use solvers_oct_m
+  use states_oct_m
 
   implicit none
 
   private
-
-  integer, public, parameter :: &
-       LS_CG              = 5,  &
-       LS_BICGSTAB        = 4,  &
-       LS_MULTIGRID       = 7,  &
-       LS_QMR_SYMMETRIC   = 81, &
-       LS_QMR_SYMMETRIZED = 82, &
-       LS_QMR_DOTP        = 83, &
-       LS_QMR_GENERAL     = 84, &
-       LS_SOS             = 9
 
   public ::                              &
        linear_solver_t,                  &
@@ -138,19 +128,24 @@ contains
     !% the explicit solution in terms of the ground-state
     !% wavefunctions. You need unoccupied states to use this method.
     !% Unlike the other methods, may not give the correct answer.
+    !%Option idrs 11
+    !% This is the "Induced Dimension Reduction", IDR(s) (for s=4). IDR(s) is a robust and efficient short recurrence 
+    !% Krylov subspace method for solving large nonsymmetric systems of linear equations. It is described in 
+    !% [Peter Sonneveld and Martin B. van Gijzen, SIAM J. Sci. Comput. 31, 1035 (2008)]. We have adapted the code
+    !% released by M. B. van Gizjen [http://ta.twi.tudelft.nl/nw/users/gijzen/IDR.html].
     !%End
 
     if(present(def_solver)) then
       defsolver_ = def_solver
     else
       if(conf%devel_version) then
-        defsolver_ = LS_QMR_DOTP
+        defsolver_ = OPTION__LINEARSOLVER__QMR_DOTP
       else
         if(states_are_real) then
-          defsolver_ = LS_QMR_SYMMETRIC
+          defsolver_ = OPTION__LINEARSOLVER__QMR_SYMMETRIC
           ! in this case, it is equivalent to LS_QMR_DOTP
         else
-          defsolver_ = LS_QMR_SYMMETRIZED
+          defsolver_ = OPTION__LINEARSOLVER__QMR_SYMMETRIZED
         end if
       end if
     end if
@@ -180,28 +175,31 @@ contains
     
     ! solver 
     select case(this%solver)
-      case(LS_CG)
+      case(OPTION__LINEARSOLVER__CG)
         message(1)='Linear Solver: Conjugate Gradients'
 
-      case(LS_BICGSTAB)
+      case(OPTION__LINEARSOLVER__BICGSTAB)
         message(1)='Linear Solver: Biconjugate Gradients Stabilized'
 
-      case(LS_MULTIGRID)
+      case(OPTION__LINEARSOLVER__IDRS)
+        message(1)='Linear Solver: IDRS'
+
+      case(OPTION__LINEARSOLVER__MULTIGRID)
         message(1)='Multigrid (currently only Gauss-Jacobi - EXPERIMENTAL)'
 
-      case(LS_QMR_SYMMETRIC)
+      case(OPTION__LINEARSOLVER__QMR_SYMMETRIC)
         message(1)='Linear Solver: Quasi-Minimal Residual, for symmetric matrix'
 
-      case(LS_QMR_SYMMETRIZED)
+      case(OPTION__LINEARSOLVER__QMR_SYMMETRIZED)
         message(1)='Linear Solver: Quasi-Minimal Residual, for symmetrized matrix'
 
-      case(LS_QMR_DOTP)
+      case(OPTION__LINEARSOLVER__QMR_DOTP)
         message(1)='Linear Solver: Quasi-Minimal Residual, symmetric with conjugated dot product'
 
-      case(LS_QMR_GENERAL)
+      case(OPTION__LINEARSOLVER__QMR_GENERAL)
         message(1)='Linear Solver: Quasi-Minimal Residual, general algorithm'
 
-      case(LS_SOS)
+      case(OPTION__LINEARSOLVER__SOS)
         message(1)='Linear Solver: Sum-over-States'
     end select
 
@@ -209,8 +207,10 @@ contains
     
     call messages_print_stress(stdout)
 
-    if(this%solver == LS_MULTIGRID) call messages_experimental("Multigrid linear solver")
-    if(this%solver == LS_QMR_DOTP)  call messages_experimental("QMR solver (symmetric with conjugated dot product)")
+    if(this%solver == OPTION__LINEARSOLVER__MULTIGRID) &
+      call messages_experimental("Multigrid linear solver")
+    if(this%solver == OPTION__LINEARSOLVER__QMR_DOTP)  &
+      call messages_experimental("QMR solver (symmetric with conjugated dot product)")
 
     POP_SUB(linear_solver_init)
 
@@ -231,7 +231,7 @@ contains
     type(linear_solver_t), intent(inout) :: this
     
     select case(this%solver)
-    case(LS_BICGSTAB)
+    case(OPTION__LINEARSOLVER__BICGSTAB)
       n = 2
     case default ! LS_CG, LS_MULTIGRID, LS_QMR, LS_SOS
       n = 1
@@ -263,7 +263,9 @@ contains
 #include "complex.F90"
 #include "linear_solver_inc.F90"
 
-end module linear_solver_m
+
+
+end module linear_solver_oct_m
 
 !! Local Variables:
 !! mode: f90

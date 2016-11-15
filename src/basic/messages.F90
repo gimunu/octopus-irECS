@@ -15,19 +15,19 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: messages.F90 15000 2016-01-07 00:38:20Z xavier $
+!! $Id: messages.F90 15244 2016-03-29 20:08:03Z dstrubbe $
 
 #include "global.h"
 
-module messages_m
-  use global_m
-  use debug_m
-  use loct_m
-  use mpi_m
-  use parser_m
-  use string_m
-  use unit_m
-  use varinfo_m
+module messages_oct_m
+  use global_oct_m
+  use debug_oct_m
+  use loct_oct_m
+  use mpi_oct_m
+  use parser_oct_m
+  use string_oct_m
+  use unit_oct_m
+  use varinfo_oct_m
 
   implicit none
 
@@ -1060,7 +1060,7 @@ contains
         write(message(2), '(a)') ' '
         write(message(3), '(a)') 'Equivalent functionality can be obtained with the '//trim(rep)
         write(message(4), '(a)') 'variable. Check the documentation for details.'
-        write(message(5), '(a)') '(You can use the `oct-help -s '//trim(rep)//'` command).'
+        write(message(5), '(a)') '(You can use the `oct-help -p '//trim(rep)//'` command).'
         call messages_fatal(5, only_root_writes = .true.)
       else
         call messages_fatal(1, only_root_writes = .true.)
@@ -1336,15 +1336,15 @@ contains
 
   end subroutine messages_dump_stack
   
-end module messages_m
+end module messages_oct_m
 
 ! ---------------------------------------------------------
 !> This subroutine is called by the assert macro, it is not in a
 !> module so it can be called from any file. The interface is declared
 !> in global_m.
 subroutine assert_die(s, f, l)
-  use messages_m
-  use mpi_m
+  use messages_oct_m
+  use mpi_oct_m
 
   implicit none
 
@@ -1370,7 +1370,7 @@ end subroutine assert_die
 !-------------------------------------------------------
 
 subroutine dump_call_stack()
-  use messages_m
+  use messages_oct_m
 
   call messages_dump_stack()
   

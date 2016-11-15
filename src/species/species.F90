@@ -15,30 +15,30 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: species.F90 14976 2016-01-05 14:27:54Z xavier $
+!! $Id: species.F90 15609 2016-09-14 15:24:25Z nicolastd $
 #include "global.h"
 
-module species_m
-  use element_m
-  use global_m
-  use iihash_m
-  use io_m
-  use json_m
-  use loct_m
-  use loct_math_m
-  use loct_pointer_m
-  use logrid_m
-  use math_m
-  use messages_m
-  use mpi_m
-  use parser_m
-  use profiling_m
-  use ps_m
-  use space_m
-  use splines_m
-  use string_m
-  use unit_m
-  use unit_system_m
+module species_oct_m
+  use element_oct_m
+  use global_oct_m
+  use iihash_oct_m
+  use io_oct_m
+  use json_oct_m
+  use loct_oct_m
+  use loct_math_oct_m
+  use loct_pointer_oct_m
+  use logrid_oct_m
+  use math_oct_m
+  use messages_oct_m
+  use mpi_oct_m
+  use parser_oct_m
+  use profiling_oct_m
+  use ps_oct_m
+  use space_oct_m
+  use splines_oct_m
+  use string_oct_m
+  use unit_oct_m
+  use unit_system_oct_m
 
   implicit none
 
@@ -70,6 +70,7 @@ module species_m
     species_sigma,                 &
     species_omega,                 &
     species_mass,                  &
+    species_vdw_radius,            &
     species_rho_string,            &
     species_filename,              &
     species_niwfs,                 &
@@ -109,7 +110,8 @@ module species_m
     FLOAT   :: z                      !< charge of the species
     FLOAT   :: z_val                  !< valence charge of the species -- the total charge
                                       !< minus the core charge in the case of the pseudopotentials
-    FLOAT   :: mass                 !< mass, in atomic mass units (!= atomic units of mass)
+    FLOAT   :: mass                   !< mass, in atomic mass units (!= atomic units of mass)
+    FLOAT   :: vdw_radius             !< vdw radius, in atomic length units.
 
     logical :: has_density            !< true if the species has an electronic density
 
@@ -136,7 +138,7 @@ module species_m
     character(len=200) :: density_formula !< If we have a charge distribution creating the potential:
 
 
-    FLOAT :: def_rsize, def_h     !< the default values for the spacing and atomic radius
+    FLOAT :: def_rsize, def_h     !< the default values for the atomic radius and  spacing
 
 
     integer :: niwfs              !< The number of initial wavefunctions
@@ -168,6 +170,7 @@ contains
     this%z=M_ZERO
     this%z_val=M_ZERO
     this%mass=M_ZERO
+    this%vdw_radius=M_ZERO
     this%has_density=.false.
     this%potential_formula=""
     this%omega=M_ZERO
@@ -208,30 +211,21 @@ contains
     !% in the PSF format for some elements: H, Li, C, N, O, Na, Si, S, Ti, Se, Cd.
     !%Option sg15 2
     !% (experimental) The set of Optimized Norm-Conserving Vanderbilt
-    !% PBE pseudopotentials (<a
-    !% href="http://dx.doi.org/10.1016/j.cpc.2015.05.011">M. Schlipf
-    !% and F. Gygi, Comp. Phys. Commun. doi:10.1016/j.cpc.2015.05.011
-    !% (2015)</a>).
-    !%
+    !% PBE pseudopotentials. Ref: M. Schlipf and F. Gygi, <i>Comp. Phys. Commun.</i> <b>196</b>, 36 (2015).
     !% This set provides pseudopotentials for elements up to Z = 83
-    !% (Bi) excluding Lanthanides.
+    !% (Bi), excluding Lanthanides.
     !%Option hgh_lda 3
     !% The set of Hartwigsen-Goedecker-Hutter LDA pseudopotentials
     !% for elements from H to Rn. For many species a semi-core variant
-    !% is available, it can be obtained by appending <tt>_sc</tt> to the
+    !% is available, obtained by appending <tt>_sc</tt> to the
     !% element name.
     !% Ref: C. Hartwigsen, S. Goedecker, and J. Hutter, <i>Phys. Rev. B</i> <b>58</b>, 3641 (1998).
     !%Option hscv_lda 4
     !% (experimental) The set of Hamann-Schlueter-Chiang-Vanderbilt (HSCV) potentials
-    !% for LDA exchange and correlation downloaded from
-    !%
-    !%  http://fpmd.ucdavis.edu/potentials/index.htm .
-    !%
+    !% for LDA exchange and correlation downloaded from http://fpmd.ucdavis.edu/potentials/index.htm.
     !% These pseudopotentials were originally intended for the QBox
     !% code. They were generated using the method of Hamann, Schluter
-    !% and Chiang, as modified by Vanderbilt (Phys. Rev. B32, 8412
-    !% (1985))
-    !%
+    !% and Chiang. Ref: D. Vanderbilt, <i>Phys. Rev. B</i> <b>32</b>, 8412 (1985).
     !% Warning from the original site: The potentials provided in this
     !% site are distributed without warranty. In most cases,
     !% potentials were not tested. Potentials should be thoroughly
@@ -454,6 +448,8 @@ contains
     !% any of the <i>x</i>, <i>y</i>, <i>z</i> or <i>r</i> variables.
     !%Option thickness -10014
     !% The thickness of the slab for species_jellium_slab. Must be positive.
+    !%Option vdw_radius -10015
+    !% The van der Waals radius that will be used for this species.
     !%End
 
     call messages_obsolete_variable('SpecieAllElectronSigma', 'Species')
@@ -581,7 +577,7 @@ contains
       ! allocate structure
       SAFE_ALLOCATE(spec%ps)
       if(spec%type == SPECIES_PSPIO) then
-        call ps_pspio_init(spec%ps, spec%Z, spec%lmax, spec%lloc, ispin, spec%filename)
+        call ps_pspio_init(spec%ps, spec%label, spec%Z, spec%lmax, spec%lloc, ispin, spec%filename)
       else
         call ps_init(spec%ps, spec%label, spec%Z, spec%lmax, spec%lloc, ispin, spec%filename)
       end if
@@ -832,6 +828,12 @@ contains
       call messages_fatal(1)
       return
     end if
+    call json_get(json, "vdw_radius", this%vdw_radius, ierr)
+    if(ierr/=JSON_OK)then
+      message(1) = 'Could not read "vdw_radius" from species data object.'
+      call messages_fatal(1)
+      return
+    end if
     this%has_density=.false.
     this%potential_formula=""
     nullify(this%ps)
@@ -864,6 +866,7 @@ contains
     call json_set(json, "type", this%type)
     call json_set(json, "z_val", this%z_val)
     call json_set(json, "mass", this%mass)
+    call json_set(json, "vdw_radius", this%vdw_radius)
     call json_set(json, "def_rsize", this%def_rsize)
 
     POP_SUB(species_create_data_object)
@@ -996,6 +999,14 @@ contains
     type(species_t), intent(in) :: spec
     species_mass = spec%mass
   end function species_mass
+  ! ---------------------------------------------------------
+
+
+  ! ---------------------------------------------------------
+  FLOAT pure function species_vdw_radius(spec)
+    type(species_t), intent(in) :: spec
+    species_vdw_radius = spec%vdw_radius
+  end function species_vdw_radius
   ! ---------------------------------------------------------
 
 
@@ -1191,7 +1202,7 @@ contains
 
     if(species_is_ps(spec)) then
       ASSERT(ii <= spec%ps%conf%p)
-      radius = spline_cutoff_radius(spec%ps%ur(ii, is), threshold)
+      radius = spline_cutoff_radius(spec%ps%ur(ii, is), spec%ps%projectors_sphere_threshold)
     else if(species_represents_real_atom(spec)) then
       radius = -ii*log(threshold)/spec%Z_val
     else
@@ -1227,6 +1238,7 @@ contains
     this%z=that%z
     this%z_val=that%z_val
     this%mass=that%mass
+    this%vdw_radius=that%vdw_radius
     this%has_density=that%has_density
     this%potential_formula=that%potential_formula
     this%omega=that%omega
@@ -1332,6 +1344,7 @@ contains
     end if
     write(iunit, '(a,f15.2)') 'z_val  = ', spec%z_val
     write(iunit, '(a,f15.2)') 'mass = ', spec%mass
+    write(iunit, '(a,f15.2)') 'vdw_radius = ', spec%vdw_radius
     bool = species_is_local(spec)
     write(iunit, '(a,l1)')    'local  = ', bool
     write(iunit, '(2a)')      'usdef  = ', trim(spec%potential_formula)
@@ -1380,12 +1393,13 @@ contains
 
     read_data = 8
 
-    ! get the mass and atomic number for this element
+    ! get the mass, vdw radius and atomic number for this element
     call element_init(element, label)
 
     ASSERT(element_valid(element))
 
     spec%mass = element_mass(element)
+    spec%vdw_radius = element_vdw_radius(element)
 
     if(spec%z < 0) then
       spec%z = element_atomic_number(element)
@@ -1461,11 +1475,12 @@ contains
     end select
 
     spec%mass = -CNST(1.0)
+    spec%vdw_radius = -CNST(1.0)
     spec%z_val = -CNST(1.0)
     spec%sc_alpha = -CNST(1.0)
     spec%jthick = -CNST(1.0)
     
-    call iihash_init(read_parameters, 10)
+    call iihash_init(read_parameters, 11)
     
     icol = read_data
     do
@@ -1583,6 +1598,10 @@ contains
           call messages_input_error('Species', 'thickness can only be used with species_jellium_slab')
         end if
         
+      case(OPTION__SPECIES__VDW_RADIUS)
+        call check_duplication(OPTION__SPECIES__VDW_RADIUS)
+        call parse_block_float(blk, row, icol + 1, spec%vdw_radius, unit = units_inp%length)
+
       case default
         call messages_input_error('Species', "Unknown parameter in species '"//trim(spec%label)//"'")
         
@@ -1650,6 +1669,20 @@ contains
         call messages_info()
       end if
         
+      if(spec%vdw_radius < CNST(0.0)) then
+        spec%vdw_radius = element_vdw_radius(element)
+        call messages_write('Info: default vdW radius for species '//trim(spec%label)//':')
+        call messages_write(spec%vdw_radius)
+        call messages_write(' [b]')
+        call messages_info()
+        if(spec%vdw_radius < CNST(0.0)) then
+          call messages_write('The default vdW radius for species '//trim(spec%label)//':')
+          call messages_write(' is not defined. ')
+          call messages_write(' Add a positive vdW radius value in %Species block. ')
+          call messages_fatal()
+        end if
+      end if
+
       call element_end(element)
         
     case default
@@ -1658,6 +1691,14 @@ contains
         call messages_write('Info: default mass for species '//trim(spec%label)//':')
         call messages_write(spec%mass)
         call messages_write(' amu.')
+        call messages_info()
+      end if
+
+      if(.not. parameter_defined(OPTION__SPECIES__VDW_RADIUS)) then
+        spec%vdw_radius = 0.0
+        call messages_write('Info: default mass for species '//trim(spec%label)//':')
+        call messages_write(spec%vdw_radius)
+        call messages_write(' [b]')
         call messages_info()
       end if
 
@@ -1861,7 +1902,7 @@ contains
   end subroutine species_iwf_fix_qn
   ! ---------------------------------------------------------
 
-end module species_m
+end module species_oct_m
 
 !! Local Variables:
 !! mode: f90

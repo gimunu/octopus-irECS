@@ -15,22 +15,34 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: pcm.F90 14987 2016-01-06 19:22:34Z xavier $
+!! $Id: pcm.F90 15436 2016-06-27 22:06:24Z adelgado $
 
 #include "global.h"
 
-module pcm_m
-  use global_m
-  use geometry_m
-  use grid_m
-  use io_m
-  use index_m
-  use messages_m
-  use mesh_m 
-  use parser_m
-  use profiling_m
-  use simul_box_m
-  use species_m
+module pcm_oct_m
+  use comm_oct_m
+  use global_oct_m
+  use geometry_oct_m
+  use grid_oct_m
+  use io_oct_m
+  use index_oct_m
+  use messages_oct_m
+  use mesh_oct_m 
+  use mesh_interpolation_oct_m 
+  use mpi_oct_m
+  use par_vec_oct_m
+  use parser_oct_m
+  use poisson_oct_m
+  use profiling_oct_m
+  use simul_box_oct_m
+  use species_oct_m
+  
+  ! to output debug info
+  use unit_oct_m
+  use unit_system_oct_m
+  use io_function_oct_m
+  use mesh_function_oct_m
+  
 
   implicit none
 
@@ -38,61 +50,80 @@ module pcm_m
 
   public ::                 &
     pcm_t,                  &
+    pcm_sphere_t,           &
+    pcm_tessera_t,          &
     pcm_init,               &
     pcm_end,                &
     pcm_charges,            &
+    pcm_get_vdw_radius,     &
     pcm_pot_rs,             &
     pcm_elect_energy,       &
     pcm_v_nuclei_cav,       &
-    pcm_v_electrons_cav_li
+    pcm_v_electrons_cav_li, &
+    pcm_update,             &
+    pcm_calc_pot_rs
 
 
   !> The cavity hosting the solute molecule is built from a set of 
   !! interlocking spheres with optimized radii centered at the nuclear positions.  
-  type :: sphere_t  
+  type :: pcm_sphere_t  
     FLOAT :: x !
     FLOAT :: y !< center of the sphere
     FLOAT :: z !
     FLOAT :: r !< radius of the sphere (different for each species)
-  end type sphere_t
+  end type pcm_sphere_t
 
   !> The resulting cavity is discretized by a set of tesserae defined in 3d.  
   integer, parameter :: pcm_dim_space = 3
 
-  type :: tessera_t
+  type :: pcm_tessera_t
     FLOAT :: point(1:pcm_dim_space)  !< representative point of the tessera  
     FLOAT :: area                    !< area of the tessera
     FLOAT :: normal(1:pcm_dim_space) !< unitary outgoing vector normal to the tessera surface  
     FLOAT :: r_sphere                !< radius of the sphere to which the tessera belongs
-  end type tessera_t
+  end type pcm_tessera_t
 
   type pcm_t
-    logical                      :: run_pcm       !< If .true., PCM calculation is enabled
-    integer                      :: n_spheres     !< Number of spheres used to build the VdW cavity
-    integer                      :: n_tesserae    !< Total number of tesserae
-    type(sphere_t), allocatable  :: spheres(:)    !< See type sphere_t
-    type(tessera_t), allocatable :: tess(:)       !< See type tessera_t
-    FLOAT                        :: scale_r       !< scaling factor for the radii of the spheres used in PCM
-    FLOAT, allocatable           :: matrix(:,:)   !< PCM response matrix
-    FLOAT, allocatable           :: q_e(:)        !< polarization charges due to the solute electrons        
-    FLOAT, allocatable           :: q_n(:)        !< polarization charges due to the solute nuclei
-    FLOAT                        :: qtot_e        !< total polarization charge due to electrons
-    FLOAT                        :: qtot_n        !< total polarization charge due to nuclei
-    FLOAT, allocatable           :: v_e(:)        !< Hartree potential at each tessera
-    FLOAT, allocatable           :: v_n(:)        !< Nuclear potential at each tessera
-    FLOAT, allocatable           :: v_e_rs(:)     !< PCM potential in real-space produced by q_e(:) 
-    FLOAT, allocatable           :: v_n_rs(:)     !< PCM potential in real-space produced by q_n(:)
-    FLOAT, allocatable           :: arg_li(:,:)   !< used in the trilinear interpolation to estimate
-    !< the Hartree potential at the tesserae 
-    FLOAT                        :: epsilon_0     !< Static dielectric constant of the solvent 
-    FLOAT                        :: epsilon_infty !< Infinite-frequency dielectric constant of the solvent
-    FLOAT                        :: gaussian_width!< Parameter to change the width of density of polarization charges  
-    integer                      :: n_vertices    !< Number of grid points used to interpolate the Hartree potential
-    !! at the tesserae 
-    integer, allocatable         :: ind_vh(:,:)   !< Grid points used during interpolation 
-    integer                      :: info_unit     !< unit for pcm info file
-    integer                      :: counter       !< used to print the number of SCF or TD iterations in energy_calc  
-    character(len=80)            :: input_cavity  !< file name containing the geometry of the VdW cavity
+    logical                          :: run_pcm       !< If .true., PCM calculation is enabled
+    integer                          :: n_spheres     !< Number of spheres used to build the VdW cavity
+    integer                          :: n_tesserae    !< Total number of tesserae
+    type(pcm_sphere_t),  allocatable :: spheres(:)    !< See type pcm_sphere_t
+    type(pcm_tessera_t), allocatable :: tess(:)       !< See type pcm_tessera_t
+    FLOAT                            :: scale_r       !< scaling factor for the radii of the spheres used in PCM
+    FLOAT, allocatable               :: matrix(:,:)   !< PCM response matrix
+    FLOAT, allocatable               :: q_e(:)        !< polarization charges due to the solute electrons        
+    FLOAT, allocatable               :: q_n(:)        !< polarization charges due to the solute nuclei
+    FLOAT, allocatable               :: rho_e(:)      !< polarization density due to the solute electrons        
+    FLOAT, allocatable               :: rho_n(:)      !< polarization density due to the solute nuclei
+    FLOAT                            :: qtot_e        !< total polarization charge due to electrons
+    FLOAT                            :: qtot_n        !< total polarization charge due to nuclei
+    FLOAT                            :: q_e_nominal   !< total (nominal) electronic charge
+    FLOAT                            :: q_n_nominal   !< total (nominal) nuclear charge
+    logical                          :: renorm_charges!< flag to renormalized polarization charges
+    FLOAT                            :: q_tot_tol     !< tolerance to trigger normalization of the polarization charges
+    FLOAT                            :: deltaQ_e      !< difference between the calculated and nominal electronic charge
+    FLOAT                            :: deltaQ_n      !< difference between the calculated and nominal nuclear charge
+    FLOAT, allocatable               :: v_e(:)        !< Hartree potential at each tessera
+    FLOAT, allocatable               :: v_n(:)        !< Nuclear potential at each tessera
+    FLOAT, allocatable               :: v_e_rs(:)     !< PCM potential in real-space produced by q_e(:) 
+    FLOAT, allocatable               :: v_n_rs(:)     !< PCM potential in real-space produced by q_n(:)
+!     FLOAT, allocatable               :: arg_li(:,:)   !< used in the trilinear interpolation to estimate
+                                                      !< the Hartree potential at the tesserae 
+    FLOAT                            :: epsilon_0     !< Static dielectric constant of the solvent 
+    FLOAT                            :: epsilon_infty !< Infinite-frequency dielectric constant of the solvent
+    FLOAT                            :: gaussian_width!< Parameter to change the width of density of polarization charges  
+!     integer                          :: n_vertices    !< Number of grid points used to interpolate the Hartree potential
+                                                      !! at the tesserae 
+!     integer, allocatable             :: ind_vh(:,:)   !< Grid points used during interpolation
+    integer                          :: info_unit     !< unit for pcm info file
+    integer                          :: counter       !< used to print the number of SCF or TD iterations in energy_calc
+    character(len=80)                :: input_cavity  !< file name containing the geometry of the VdW cavity
+    
+    integer                          :: update_iter   !< how often the pcm potential is updated
+    integer                          :: iter          !< update iteration counter
+    
+    integer                          :: calc_method   !< which method should be used to obtain the pcm potential 
+    integer                          :: tess_nn       !< number of tessera center mesh-point nearest neighbors
   end type pcm_t
 
   FLOAT, allocatable :: s_mat_act(:,:) !< S_I matrix 
@@ -100,62 +131,59 @@ module pcm_m
   FLOAT, allocatable :: Sigma(:,:)     !< S_E matrix
   FLOAT, allocatable :: Delta(:,:)     !< D_E matrix in JCP 139, 024105 (2013).
 
-  FLOAT, allocatable :: mat_gamess(:,:) !< PCM matrix formatted to be inputed to GAMESS
-  FLOAT, allocatable :: sr_dist(:,:)    !< Table storing the distances between tesserae and grid points.
+  logical            :: gamess_benchmark !< Decide to output pcm_matrix in a GAMESS format 
+  FLOAT, allocatable :: mat_gamess(:,:)  !< PCM matrix formatted to be inputed to GAMESS
+
+  integer, parameter ::     &
+    PCM_ELECTRONS = 0,       &
+    PCM_NUCLEI    = 1
+
+  integer, parameter ::     &
+    PCM_CALC_DIRECT  = 1,    &
+    PCM_CALC_POISSON = 2
+
+  integer, parameter ::       &
+    PCM_VDW_OPTIMIZED   = 1,   &
+    PCM_VDW_SPECIES     = 2
 
 contains
 
+
   !-------------------------------------------------------------------------------------------------------
   !> Initializes the PCM calculation: reads the VdW molecular cavity and generates the PCM response matrix.
-  subroutine pcm_init(pcm, geo, grid)
+  subroutine pcm_init(pcm, geo, grid, qtot, val_charge)
     type(geometry_t), intent(in) :: geo
     type(grid_t), intent(in)     :: grid
     type(pcm_t), intent(out)     :: pcm
+    FLOAT, intent(in)            :: qtot
+    FLOAT, intent(in)            :: val_charge
 
-    integer :: ia, itess, jtess, cav_unit_test, subdivider
-    integer :: pcmmat_unit, pcmmat_gamess_unit, iunit, ip
+    integer :: ia, ip, ii, itess, jtess, pcm_vdw_type, subdivider
+    integer :: cav_unit_test, iunit, pcmmat_unit
+    integer :: pcmmat_gamess_unit, cav_gamess_unit      
 
     integer, parameter :: mxts = 10000
 
-    integer, parameter :: upto_Xe = 54
-    FLOAT              :: vdw_radii(1:upto_Xe) !< van der Waals radii in Angstrom for elements H-Xe reported
-    !  by Stefan Grimme in J. Comput. Chem. 27: 1787-1799, 2006
-    !  except for C, N and O, reported in J. Chem. Phys. 120, 3893 (2004).
-    data (vdw_radii(ia), ia=1, upto_Xe)            		        						 / &
-     !H													      He
-      CNST(1.001),                                                                                            CNST(1.012), &
-     !Li     	   Be			     B 	          C	       N	    O	         F	      Ne	           
-      CNST(0.825), CNST(1.408),              CNST(1.485), CNST(2.000), CNST(1.583), CNST(1.500), CNST(1.287), CNST(1.243), &
-     !Na           Mg                        Al           Si           P            S            Cl           Ar
-      CNST(1.144), CNST(1.364),              CNST(1.639), CNST(1.716), CNST(1.705), CNST(1.683), CNST(1.639), CNST(1.595), &
-     !K            Ca
-      CNST(1.485), CNST(1.474),                                                                                            &
-     !>      Sc -- Zn       <!                                       
-      CNST(1.562), CNST(1.562),     	    				 		           &
-      CNST(1.562), CNST(1.562), 								   &
-      CNST(1.562), CNST(1.562), 								   &
-      CNST(1.562), CNST(1.562), 							           &
-      CNST(1.562), CNST(1.562),                                                                  &
-     !Ga           Ge           As           Se           Br           Kr 
-      CNST(1.650), CNST(1.727), CNST(1.760), CNST(1.771), CNST(1.749), CNST(1.727), &
-                                !Rb           Sr           !>      Y -- Cd        <!                                       
-      CNST(1.628), CNST(1.606), CNST(1.639), CNST(1.639),						                   &
-      CNST(1.639), CNST(1.639),						                   &
-      CNST(1.639), CNST(1.639),						                   &
-      CNST(1.639), CNST(1.639),                                                                  &
-      CNST(1.639), CNST(1.639),                                                                  &
-     !In	          Sn           Sb           Te           I            Xe
-      CNST(1.672), CNST(1.804), CNST(1.881), CNST(1.892), CNST(1.892), CNST(1.881)  /
+    FLOAT              :: default_value
+    FLOAT              :: vdw_radius
 
-    type(tessera_t) :: dum2(1)
+    type(pcm_tessera_t) :: dum2(1)
 
     logical :: band
     logical :: add_spheres_h
+    logical :: changed_default_nn
 
     type(species_t), pointer :: spci 
     FLOAT :: z_ia
+    
+    integer :: default_nn
+    FLOAT   :: max_area
+    
 
     PUSH_SUB(pcm_init)
+    
+    pcm%iter = 0
+    pcm%update_iter = 1
 
     !%Variable PCMCalculation
     !%Type logical
@@ -164,13 +192,14 @@ contains
     !%Description
     !% (Experimental) If true, the calculation is performed accounting for solvation effects
     !% by using the Integral Equation Formalism Polarizable Continuum Model IEF-PCM
-    !% formulated in real-space and real-time (arXiv:1507.05471, <i>Chem. Rev.</i> <b>105</b>, 2999 (2005),
-    !% <i>J. Chem. Phys.</i> <b>139</b>, 024105 (2013)). At the moment, this option is available 
-    !% only for <tt>TheoryLevel = DFT</tt>.
+    !% formulated in real-space and real-time (<i>J. Chem. Phys.<i> <b>143</b>, 144111 (2015),
+    !% <i>Chem. Rev.</i> <b>105</b>, 2999 (2005), <i>J. Chem. Phys.</i> <b>139</b>, 024105 (2013)).
+    !% At the moment, this option is available only for <tt>TheoryLevel = DFT</tt>.
     !%End
 
     call parse_variable('PCMCalculation', .false., pcm%run_pcm)
     if (pcm%run_pcm) then
+      call messages_print_stress(stdout, trim('PCM'))
       if ( (grid%sb%box_shape /= MINIMUM).OR.(grid%sb%dim /= pcm_dim_space) ) then
         message(1) = "PCM is only available for BoxShape = minimum and 3d calculations"
         call messages_fatal(1)
@@ -182,14 +211,39 @@ contains
       return
     end if
 
+    !%Variable PCMVdWRadii
+    !%Type integer
+    !%Default pcm_vdw_optimized
+    !%Section Hamiltonian::PCM
+    !%Description
+    !% This variable selects which van der Waals radius will be used to generate the solvent cavity.
+    !%Option pcm_vdw_optimized  1
+    !% Use the van der Waals radius optimized by Stefan Grimme in J. Comput. Chem. 27: 1787-1799, 2006, 
+    !% except for C, N and O, reported in J. Chem. Phys. 120, 3893 (2004).
+    !%Option pcm_vdw_species  2
+    !% The vdW radii are set from the <tt>share/pseudopotentials/elements</tt> file. These values are obtained from
+    !% Alvarez S., Dalton Trans., 2013, 42, 8617-8636. Values can be changed in the <tt>Species</tt> block.
+    !%End
+    call parse_variable('PCMVdWRadii', PCM_VDW_OPTIMIZED, pcm_vdw_type)
+    call messages_print_var_option(stdout, "PCMVdWRadii", pcm_vdw_type)
+
+    select case (pcm_vdw_type)
+      case (PCM_VDW_OPTIMIZED) 
+         default_value = 1.2d0
+      case (PCM_VDW_SPECIES) 
+         default_value = 1.d0
+    end select 
+   
     !%Variable PCMRadiusScaling
     !%Type float
-    !%Default 1.2
     !%Section Hamiltonian::PCM
     !%Description
     !% Scales the radii of the spheres used to build the solute cavity surface.
+    !% The default value depends on the choice of <tt>PCMVdWRadii</tt>:
+    !% 1.2 for <tt>pcm_vdw_optimized</tt> and 1.0 for <tt>pcm_vdw_species</tt>.
     !%End
-    call parse_variable('PCMRadiusScaling', CNST(1.2), pcm%scale_r)
+    call parse_variable('PCMRadiusScaling', default_value, pcm%scale_r)
+    call messages_print_var_value(stdout, "PCMRadiusScaling", pcm%scale_r)
 
     !%Variable PCMStaticEpsilon
     !%Type float
@@ -199,6 +253,7 @@ contains
     !% Static dielectric constant of the solvent (<math>\varepsilon_0</math>). 1.0 indicates gas phase.
     !%End
     call parse_variable('PCMStaticEpsilon', M_ONE, pcm%epsilon_0)
+    call messages_print_var_value(stdout, "PCMStaticEpsilon", pcm%epsilon_0)
 
     !%Variable PCMDynamicEpsilon
     !%Type float
@@ -207,9 +262,63 @@ contains
     !%Description
     !% High-frequency dielectric constant of the solvent (<math>\varepsilon_d</math>). 1.0 indicates gas phase.
     !% At present, non-equilibrium effects within PCM calculations are not implemented. For td calculations
-    !% take PCMDynamicEpsilon = PCMStaticEpsilon (default). 
+    !% take <tt>PCMDynamicEpsilon = PCMStaticEpsilon</tt> (default). 
     !%End
     call parse_variable('PCMDynamicEpsilon', pcm%epsilon_0, pcm%epsilon_infty)
+    call messages_print_var_value(stdout, "PCMDynamicEpsilon", pcm%epsilon_infty)
+    
+    !%Variable PCMUpdateIter
+    !%Type integer
+    !%Default 1
+    !%Section Hamiltonian::PCM
+    !%Description
+    !% Defines how often the PCM potential is updated during time propagation.
+    !%End
+    call parse_variable('PCMUpdateIter', 1, pcm%update_iter)
+    call messages_print_var_value(stdout, "PCMUpdateIter", pcm%update_iter)
+
+    !%Variable PCMGamessBenchmark
+    !%Type logical
+    !%Default .false.
+    !%Section Hamiltonian::PCM
+    !%Description
+    !% If PCMGamessBenchmark is set to "yes", the pcm_matrix is also written in a Gamess format.
+    !% for benchamarking purposes.
+    !%End
+    call parse_variable('PCMGamessBenchmark', .false., gamess_benchmark)
+
+    !%Variable PCMRenormCharges
+    !%Type logical
+    !%Default .false.
+    !%Section Hamiltonian::PCM
+    !%Description
+    !% If .true. renormalization of the polarization charges is performed to enforce fulfillment
+    !% of the Gauss law, <math>\sum_i q_i^{e/n} = -[(\epsilon-1)/\epsilon] Q_M^{e/n}</math> where 
+    !% <math>q_i^{e/n}</math> are the polarization charges induced by the electrons/nuclei of the molecule
+    !% and <math>Q_M^{e/n}</math> is the nominal electronic/nuclear charge of the system. This can be needed
+    !% to treat molecules in weakly polar solvents.
+    !%End
+    call parse_variable('PCMRenormCharges', .false., pcm%renorm_charges)
+
+    !%Variable PCMQtotTol
+    !%Type float
+    !%Default 0.5
+    !%Section Hamiltonian::PCM
+    !%Description
+    !% If <tt>PCMRenormCharges=.true.</tt> and  <math>\delta Q = |[\sum_i q_i| - ((\epsilon-1)/\epsilon)*|Q_M]|>PCMQtotTol</math>
+    !% the polarization charges will be normalized as 
+    !% <math>q_i^\prime=q_i + signfunction(e, n, \delta Q) (q_i/q_{tot})*\delta Q</math>
+    !% with <math>q_{tot} = \sum_i q_i</math>. For values of <math>\delta Q > 0.5</math>
+    !% (printed by the code in the file pcm/pcm_info.out) even, if polarization charges are renormalized, 
+    !% the calculated results might be inaccurate or erroneous.
+    !%End
+    call parse_variable('PCMQtotTol', CNST(0.5), pcm%q_tot_tol)
+
+    if (pcm%renorm_charges) then
+      message(1) = "Info: Polarization charges will be renormalized"
+      message(2) = "      if |Q_tot_PCM - Q_M| > PCMQtotTol"
+      call messages_info(2)
+    endif
 
     !%Variable PCMSmearingFactor
     !%Type float
@@ -221,6 +330,7 @@ contains
     !% reaction potential in real-space is defined by using point charges.
     !%End
     call parse_variable('PCMSmearingFactor', M_ONE, pcm%gaussian_width)
+    call messages_print_var_value(stdout, "PCMSmearingFactor", pcm%gaussian_width)
 
     if (pcm%gaussian_width == M_ZERO) then
       message(1) = "Info: PCM potential will be defined in terms of polarization point charges"
@@ -282,42 +392,37 @@ contains
         pcm%spheres(pcm%n_spheres)%y = geo%atom(ia)%x(2)
         pcm%spheres(pcm%n_spheres)%z = geo%atom(ia)%x(3)
 
-        spci => geo%atom(ia)%species
-        z_ia = species_z(spci)
-
-        if ( (INT(z_ia) < 1).or.(INT(z_ia) > upto_Xe) ) then
-          write(message(1),'(a,a)') "The van der Waals radius is missing for element ", geo%atom(ia)%label
-          call messages_fatal(1)       
-        end if
-
-        pcm%spheres(pcm%n_spheres)%r = vdw_radii(INT(z_ia))*P_Ang*pcm%scale_r     
+        vdw_radius = pcm_get_vdw_radius(geo%atom(ia)%species, pcm_vdw_type)
+        pcm%spheres(pcm%n_spheres)%r = vdw_radius*pcm%scale_r     
       end do
 
-      pcm%info_unit = io_open(PCM_DIR//'pcm_info.out', action='write')
-
-      write(pcm%info_unit,'(A35)') '# Configuration: Molecule + Solvent'
-      write(pcm%info_unit,'(A35)') '# ---------------------------------'
-      write(pcm%info_unit,'(A21,F12.3)') '# Epsilon(Solvent) = ', pcm%epsilon_0
-      write(pcm%info_unit,'(A1)')'#' 
-      write(pcm%info_unit,'(A35,I4)') '# Number of interlocking spheres = ', pcm%n_spheres
-      write(pcm%info_unit,'(A1)')'#'  
-
-      write(pcm%info_unit,'(A8,3X,A7,8X,A26,20X,A10)') '# SPHERE', 'ELEMENT', 'CENTER  (X,Y,Z) (A)', 'RADIUS (A)'
-      write(pcm%info_unit,'(A8,3X,A7,4X,A43,7X,A10)') '# ------', '-------', &
-        '-------------------------------------------', '----------'  
-
-      pcm%n_spheres = 0
-      do ia = 1, geo%natoms
-        if (geo%atom(ia)%label == 'H') cycle
-        pcm%n_spheres = pcm%n_spheres + 1       
-
-        write(pcm%info_unit,'(A1,2X,I3,7X,A2,3X,F14.8,2X,F14.8,2X,F14.8,4X,F14.8)')'#', pcm%n_spheres, &
-          geo%atom(ia)%label,          &
-          geo%atom(ia)%x(1)*P_a_B,     &
-          geo%atom(ia)%x(2)*P_a_B,     &
-          geo%atom(ia)%x(3)*P_a_B,     &
-          pcm%spheres(pcm%n_spheres)%r*P_a_B
-      end do
+      if ( mpi_grp_is_root(mpi_world) ) then
+        pcm%info_unit = io_open(PCM_DIR//'pcm_info.out', action='write')
+      
+        write(pcm%info_unit,'(A35)') '# Configuration: Molecule + Solvent'
+        write(pcm%info_unit,'(A35)') '# ---------------------------------'
+        write(pcm%info_unit,'(A21,F12.3)') '# Epsilon(Solvent) = ', pcm%epsilon_0
+        write(pcm%info_unit,'(A1)')'#' 
+        write(pcm%info_unit,'(A35,I4)') '# Number of interlocking spheres = ', pcm%n_spheres
+        write(pcm%info_unit,'(A1)')'#'  
+      
+        write(pcm%info_unit,'(A8,3X,A7,8X,A26,20X,A10)') '# SPHERE', 'ELEMENT', 'CENTER  (X,Y,Z) (A)', 'RADIUS (A)'
+        write(pcm%info_unit,'(A8,3X,A7,4X,A43,7X,A10)') '# ------', '-------', &
+          '-------------------------------------------', '----------'  
+      end if
+      
+        pcm%n_spheres = 0
+        do ia = 1, geo%natoms
+        if ( (.not.(add_spheres_h)).and.(geo%atom(ia)%label == 'H') ) cycle
+          pcm%n_spheres = pcm%n_spheres + 1       
+          if ( mpi_grp_is_root(mpi_world) ) & 
+            write(pcm%info_unit,'(A1,2X,I3,7X,A2,3X,F14.8,2X,F14.8,2X,F14.8,4X,F14.8)')'#', pcm%n_spheres, &
+              geo%atom(ia)%label,          &
+              geo%atom(ia)%x(1)*P_a_B,     &
+              geo%atom(ia)%x(2)*P_a_B,     &
+              geo%atom(ia)%x(3)*P_a_B,     &
+              pcm%spheres(pcm%n_spheres)%r*P_a_B
+        end do
 
       !%Variable PCMTessSubdivider
       !%Type integer
@@ -396,83 +501,202 @@ contains
       call messages_info(1)
     end if
 
-    cav_unit_test = io_open(PCM_DIR//'cavity_mol.xyz', action='write')
-
-    write (cav_unit_test,'(2X,I4)') pcm%n_tesserae + geo%natoms
-    write (cav_unit_test,'(2X)')
-
-    do ia = 1, pcm%n_tesserae
-      write(cav_unit_test,'(2X,A2,3X,4f15.8,3X,4f15.8,3X,4f15.8)') 'H', pcm%tess(ia)%point*P_a_B
-    end do
-
-    do ia = 1, geo%natoms
-      write(cav_unit_test,'(2X,A2,3X,4f15.8,3X,4f15.8,3X,4f15.8)') geo%atom(ia)%label,      &
-        geo%atom(ia)%x*P_a_B
-    end do
-
-    call io_close(cav_unit_test)
-
-    write(pcm%info_unit,'(A1)')'#'  
-    write(pcm%info_unit,'(A1,4X,A4,14X,A4,21X,A4,21X,A4,21X,A4,21X,A8,17X,A5,20X,A5)') &
-      '#','iter', 'E_ee', 'E_en', 'E_nn', 'E_ne', 'E_M-solv', 'Q_M^e','Q_M^n'
+    if ( mpi_grp_is_root(mpi_world) ) then
+      cav_unit_test = io_open(PCM_DIR//'cavity_mol.xyz', action='write')
+     
+      write (cav_unit_test,'(2X,I4)') pcm%n_tesserae + geo%natoms
+      write (cav_unit_test,'(2X)')
+     
+      do ia = 1, pcm%n_tesserae
+        write(cav_unit_test,'(2X,A2,3X,4f15.8,3X,4f15.8,3X,4f15.8)') 'H', pcm%tess(ia)%point*P_a_B
+      end do
+     
+      do ia = 1, geo%natoms
+        write(cav_unit_test,'(2X,A2,3X,4f15.8,3X,4f15.8,3X,4f15.8)') geo%atom(ia)%label,      &
+          geo%atom(ia)%x*P_a_B
+      end do
+     
+      call io_close(cav_unit_test)
+     
+      write(pcm%info_unit,'(A1)')'#'  
+      write(pcm%info_unit,'(A1,4X,A4,14X,A4,21X,A4,21X,A4,21X,A4,21X,A8,17X,A5,20X,A8,17X,A5,20X, A8)') &
+        '#','iter', 'E_ee', 'E_en', 'E_nn', 'E_ne', 'E_M-solv', 'Q_M^e', 'deltaQ^e', 'Q_M^n', 'deltaQ^n'
+    end if
     pcm%counter = 0
 
-    pcm%n_vertices = 8
-    SAFE_ALLOCATE(pcm%ind_vh(1:pcm%n_tesserae, 1:pcm%n_vertices))
-    pcm%ind_vh = INT(M_ZERO)
+!     pcm%n_vertices = 8
+!     cSAFE_ALLOCATE(pcm%ind_vh(1:pcm%n_tesserae, 1:pcm%n_vertices))
+!     pcm%ind_vh = INT(M_ZERO)
 
-    SAFE_ALLOCATE(pcm%arg_li(1:pcm%n_tesserae, 1:pcm_dim_space))
-    pcm%arg_li = M_ZERO
+!     cSAFE_ALLOCATE(pcm%arg_li(1:pcm%n_tesserae, 1:pcm_dim_space))
+!     pcm%arg_li = M_ZERO
 
-    !> Creating the list of the nearest grid points to each tessera
-    !! to be used to interpolate the Hartree potential at the representative points
-    SAFE_ALLOCATE(sr_dist(1:pcm%n_tesserae, 1:grid%mesh%np)) 
-    sr_dist = M_ZERO
-    do ia = 1, pcm%n_tesserae
-      call nearest_cube_vertices(pcm%tess(ia)%point, grid%mesh, pcm%ind_vh(ia,:), pcm%arg_li(ia,:))
-      do ip = 1, grid%mesh%np !running serially np=np_global
-        call mesh_r(grid%mesh, ip, sr_dist(ia,ip), origin=pcm%tess(ia)%point)
+!     !> Creating the list of the nearest grid points to each tessera
+!     !! to be used to interpolate the Hartree potential at the representative points
+!     do ia = 1, pcm%n_tesserae
+!       call nearest_cube_vertices(pcm%tess(ia)%point, grid%mesh, pcm%ind_vh(ia,:), pcm%arg_li(ia,:))
+!     end do
+
+    !>printing out the cavity surface
+    if ( gamess_benchmark .and. mpi_grp_is_root(mpi_world)) then 
+      cav_gamess_unit = io_open(PCM_DIR//'geom_cavity_gamess.out', action='write')
+
+      write(cav_gamess_unit,*) pcm%n_tesserae
+
+      do ia=1, pcm%n_tesserae
+        write(cav_gamess_unit,*) pcm%tess(ia)%point(1)
       end do
-    end do
+
+      do ia=1, pcm%n_tesserae
+        write(cav_gamess_unit,*) pcm%tess(ia)%point(2)
+      end do
+
+      do ia=1, pcm%n_tesserae
+        write(cav_gamess_unit,*) pcm%tess(ia)%point(3)
+      end do
+
+      do ia=1, pcm%n_tesserae
+        write(cav_gamess_unit,*) pcm%tess(ia)%area
+      end do
+
+      do ia=1, pcm%n_tesserae
+        write(cav_gamess_unit,*) pcm%tess(ia)%r_sphere
+      end do
+
+      do ia=1, pcm%n_tesserae
+        write(cav_gamess_unit,*) pcm%tess(ia)%normal
+      end do
+
+      call io_close(cav_gamess_unit)
+    endif
 
     !>Generating the dynamical PCM matrix
-    SAFE_ALLOCATE( mat_gamess(1:pcm%n_tesserae, 1:pcm%n_tesserae) )
-    mat_gamess = M_ZERO
+    if ( gamess_benchmark ) then
+      SAFE_ALLOCATE( mat_gamess(1:pcm%n_tesserae, 1:pcm%n_tesserae) )
+      mat_gamess = M_ZERO
+    end if
 
     SAFE_ALLOCATE( pcm%matrix(1:pcm%n_tesserae, 1:pcm%n_tesserae) )
     pcm%matrix = M_ZERO
 
     call pcm_matrix(pcm%epsilon_infty, pcm%tess, pcm%n_tesserae, pcm%matrix) 
 
-    pcmmat_gamess_unit = io_open(PCM_DIR//'pcm_matrix_gamess_dyn.out', action='write')
+    if ( gamess_benchmark .and. mpi_grp_is_root(mpi_world)) then 
+      pcmmat_gamess_unit = io_open(PCM_DIR//'pcm_matrix_gamess_dyn.out', action='write')
 
-    do jtess = 1, pcm%n_tesserae
-      do itess = 1, pcm%n_tesserae
-        write(pcmmat_gamess_unit,*) mat_gamess(itess,jtess) !< for benchmarking with GAMESS
+      do jtess = 1, pcm%n_tesserae
+        do itess = 1, pcm%n_tesserae
+          write(pcmmat_gamess_unit,*) mat_gamess(itess,jtess) !< for benchmarking with GAMESS
+        end do
       end do
-    end do
 
-    call io_close(pcmmat_gamess_unit)
+      call io_close(pcmmat_gamess_unit)
+      mat_gamess = M_ZERO
+    end if
 
     pcm%matrix = M_ZERO
-    mat_gamess = M_ZERO
 
     call pcm_matrix(pcm%epsilon_0, pcm%tess, pcm%n_tesserae, pcm%matrix) 
     message(1) = "Info: PCM response matrix has been evaluated"
     call messages_info(1)
 
-    pcmmat_unit = io_open(PCM_DIR//'pcm_matrix.out', action='write')
-    pcmmat_gamess_unit = io_open(PCM_DIR//'pcm_matrix_gamess.out', action='write')
+    if (mpi_grp_is_root(mpi_world)) then
+      pcmmat_unit = io_open(PCM_DIR//'pcm_matrix.out', action='write')
+      if ( gamess_benchmark ) pcmmat_gamess_unit = io_open(PCM_DIR//'pcm_matrix_gamess.out', action='write')
 
-    do jtess = 1, pcm%n_tesserae
-      do itess = 1, pcm%n_tesserae
-        write(pcmmat_unit,*) pcm%matrix(itess,jtess)
-        write(pcmmat_gamess_unit,*) mat_gamess(itess,jtess) !< for benchmarking with GAMESS
+      do jtess = 1, pcm%n_tesserae
+        do itess = 1, pcm%n_tesserae
+          write(pcmmat_unit,*) pcm%matrix(itess,jtess)
+          if ( gamess_benchmark ) write(pcmmat_gamess_unit,*) mat_gamess(itess,jtess) !< for benchmarking with GAMESS
+        end do
       end do
-    end do
+      call io_close(pcmmat_unit)
+      if ( gamess_benchmark ) call io_close(pcmmat_gamess_unit)
+    end if
+#ifdef HAVE_MPI
+    call MPI_Barrier(mpi_world%comm, mpi_err)
+#endif
+    if ( gamess_benchmark ) then 
+      SAFE_DEALLOCATE_A ( mat_gamess )
+    end if
+    
+    
+    !%Variable PCMCalcMethod
+    !%Type integer
+    !%Default pcm_direct
+    !%Section Hamiltonian::PCM
+    !%Description
+    !% Defines the method to be used to obtain the PCM potential.
+    !%Option pcm_direct 1
+    !% Direct sum of the potential generated by the polarization charges regularized 
+    !% with a Gaussian smearing [A. Delgado, et al., J Chem Phys 143, 144111 (2015)].
+    !%Option pcm_poisson 2
+    !% Solving the Poisson equation for the polarization charge density.
+    !%End
+    call parse_variable('PCMCalcMethod', PCM_CALC_DIRECT, pcm%calc_method)
+    call messages_print_var_option(stdout, "PCMCalcMethod", pcm%calc_method)
 
-    call io_close(pcmmat_unit)
-    call io_close(pcmmat_gamess_unit)
+
+    if (pcm%calc_method == PCM_CALC_POISSON) then
+
+      max_area = M_EPSILON
+      do ia = 1, pcm%n_tesserae
+        if (pcm%tess(ia)%area > max_area) max_area = pcm%tess(ia)%area
+      end do
+    
+      !default is as many neighbor to contain 1 gaussian width 
+      default_nn=int(max_area*pcm%gaussian_width/minval(grid%mesh%spacing(1:grid%mesh%sb%dim)))
+      
+      changed_default_nn = .false.
+
+      do ii=default_nn, 1, -1
+        pcm%tess_nn = ii 
+        if (pcm_nn_in_mesh(pcm,grid%mesh)) then 
+          exit
+        else 
+          changed_default_nn = .true.
+        end if
+      end do
+      if (changed_default_nn) then
+        call messages_write('PCM nearest neighbors have been reduced from ')
+        call messages_write(default_nn)
+        call messages_write(' to ')
+        call messages_write(pcm%tess_nn)
+        call messages_new_line()
+        call messages_write('in order to fit them into the mesh.')        
+        call messages_new_line()
+        call messages_write('This may produce unexpected results. ')        
+        call messages_warning()
+      end if
+      
+
+      !%Variable PCMChargeSmearNN
+      !%Type integer
+      !%Default 2 * max_area * PCMSmearingFactor
+      !%Section Hamiltonian::PCM
+      !%Description
+      !% Defines the number of nearest neighbor mesh-points to be taken around each 
+      !% cavity tessera in order to smear the charge when PCMCalcMethod = pcm_poisson.
+      !% Setting PCMChargeSmearNN = 1 means first nearest neighbors, PCMChargeSmearNN = 2
+      !% second nearest neighbors, and so on.
+      !% The default value is such that the neighbor mesh contains points in a radius 
+      !% equal to the width used for the gaussian smearing.
+      !%End
+      
+      call parse_variable('PCMChargeSmearNN', pcm%tess_nn, pcm%tess_nn)
+      call messages_print_var_value(stdout, "PCMChargeSmearNN", pcm%tess_nn)
+      
+      call pcm_poisson_sanity_check(pcm, grid%mesh)
+      
+    end if
+    
+    if (pcm%run_pcm)  call messages_print_stress(stdout)
+
+    if (pcm%calc_method == PCM_CALC_POISSON) then
+      SAFE_ALLOCATE( pcm%rho_n(1:grid%mesh%np_part) )
+      SAFE_ALLOCATE( pcm%rho_e(1:grid%mesh%np_part) )
+    end if 
+
 
     SAFE_ALLOCATE( pcm%v_n(1:pcm%n_tesserae) )
     SAFE_ALLOCATE( pcm%q_n(1:pcm%n_tesserae) )
@@ -487,48 +711,80 @@ contains
     pcm%v_e    = M_ZERO
     pcm%q_e    = M_ZERO
     pcm%v_e_rs = M_ZERO
+   
+    pcm%q_e_nominal = qtot
+    pcm%q_n_nominal = val_charge
+    pcm%deltaQ_e = M_ZERO
+    pcm%deltaQ_n = M_ZERO
 
     POP_SUB(pcm_init)
   end subroutine pcm_init
 
   ! -----------------------------------------------------------------------------
 
+  subroutine pcm_calc_pot_rs(pcm, mesh, geo, v_h)
+    type(pcm_t),             intent(inout) :: pcm
+    type(mesh_t),               intent(in) :: mesh  
+    type(geometry_t), optional, intent(in) :: geo
+    FLOAT,            optional, intent(in) :: v_h(:)
+    
+    integer :: calc
+
+    PUSH_SUB(pcm_calc_pot_rs)  
+    
+    ASSERT(present(v_h) .or. present(geo))
+    
+    if (present(v_h)) calc = PCM_ELECTRONS
+    if (present(geo)) calc = PCM_NUCLEI
+    
+    if (calc == PCM_NUCLEI) then
+      call pcm_v_nuclei_cav(pcm%v_n, geo, pcm%tess, pcm%n_tesserae)
+      call pcm_charges(pcm%q_n, pcm%qtot_n, pcm%v_n, pcm%matrix, pcm%n_tesserae, &
+                       pcm%q_n_nominal, pcm%epsilon_0, pcm%renorm_charges, pcm%q_tot_tol, pcm%deltaQ_n)
+      if (pcm%calc_method == PCM_CALC_POISSON) call pcm_charge_density(pcm, pcm%q_n, pcm%qtot_n, mesh, pcm%rho_n)
+      call pcm_pot_rs(pcm, pcm%v_n_rs, pcm%q_n, pcm%rho_n, mesh)      
+    end if
+
+    if (calc == PCM_ELECTRONS) then
+      call pcm_v_electrons_cav_li(pcm%v_e, v_h, pcm, mesh)
+      call pcm_charges(pcm%q_e, pcm%qtot_e, pcm%v_e, pcm%matrix, pcm%n_tesserae, &
+                       pcm%q_e_nominal, pcm%epsilon_0, pcm%renorm_charges, pcm%q_tot_tol, pcm%deltaQ_e) 
+      if (pcm%calc_method == PCM_CALC_POISSON) call pcm_charge_density(pcm, pcm%q_e, pcm%qtot_e, mesh, pcm%rho_e)
+      call pcm_pot_rs(pcm, pcm%v_e_rs, pcm%q_e, pcm%rho_e, mesh )
+    end if
+    
+    
+    POP_SUB(pcm_calc_pot_rs)  
+  end subroutine pcm_calc_pot_rs
+
+
+  ! -----------------------------------------------------------------------------
+
   !> Calculates the Hartree potential at the tessera representative points by doing 
   !! a 3D linear interpolation. 
-  subroutine pcm_v_electrons_cav_li(v_e_cav, v_hartree, pcm)
+  subroutine pcm_v_electrons_cav_li(v_e_cav, v_hartree, pcm, mesh)
     type(pcm_t), intent(in)  :: pcm
+    type(mesh_t), intent(in) :: mesh
     FLOAT, intent(in)        :: v_hartree(:) !< (1:mesh%np)
     FLOAT, intent(out)       :: v_e_cav(:)   !< (1:n_tess)
 
     integer :: ia
 
-    FLOAT :: C_00, C_10, C_01, C_11, C_0, C_1
+    type(mesh_interpolation_t)  :: mesh_interpolation
 
     PUSH_SUB(pcm_v_electrons_cav_li)    
 
     v_e_cav = M_ZERO
+    
+    call mesh_interpolation_init(mesh_interpolation, mesh)
 
     do ia = 1, pcm%n_tesserae
 
-      C_00 = v_hartree( pcm%ind_vh(ia,1) )*( M_ONE - pcm%arg_li(ia,1) ) + &
-        v_hartree( pcm%ind_vh(ia,5) )*( pcm%arg_li(ia,1) )
-
-      C_10 = v_hartree( pcm%ind_vh(ia,2) )*( M_ONE - pcm%arg_li(ia,1) ) + &
-        v_hartree( pcm%ind_vh(ia,6) )*( pcm%arg_li(ia,1) )
-
-      C_01 = v_hartree( pcm%ind_vh(ia,4) )*( M_ONE - pcm%arg_li(ia,1) ) + &
-        v_hartree( pcm%ind_vh(ia,8) )*( pcm%arg_li(ia,1) )
-
-      C_11 = v_hartree( pcm%ind_vh(ia,3) )*( M_ONE - pcm%arg_li(ia,1) ) + &
-        v_hartree( pcm%ind_vh(ia,7) )*( pcm%arg_li(ia,1) )
-
-      C_0 = C_00*( M_ONE - pcm%arg_li(ia,2) ) + C_10*pcm%arg_li(ia,2)
-
-      C_1 = C_01*( M_ONE - pcm%arg_li(ia,2) ) + C_11*pcm%arg_li(ia,2)
-
-      v_e_cav(ia) = C_0*( M_ONE - pcm%arg_li(ia,3) ) + C_1*pcm%arg_li(ia,3)
+      call mesh_interpolation_evaluate(mesh_interpolation, v_hartree, pcm%tess(ia)%point, v_e_cav(ia))
 
     end do
+
+    call mesh_interpolation_end(mesh_interpolation)
 
     POP_SUB(pcm_v_electrons_cav_li)
   end subroutine pcm_v_electrons_cav_li
@@ -540,7 +796,7 @@ contains
   subroutine pcm_v_nuclei_cav(v_n_cav, geo, tess, n_tess)
     FLOAT,               intent(out)   :: v_n_cav(:) !< (1:n_tess)
     type(geometry_t),    intent(in)    :: geo
-    type(tessera_t),     intent(in)    :: tess(:)    !< (1:n_tess)
+    type(pcm_tessera_t),     intent(in)    :: tess(:)    !< (1:n_tess)
     integer,             intent(in)    :: n_tess
 
     FLOAT   :: diff(1:pcm_dim_space), dist, z_ia
@@ -621,6 +877,25 @@ contains
     E_int_en = M_HALF*E_int_en
     E_int_ne = M_HALF*E_int_ne
     E_int_nn = M_HALF*E_int_nn
+
+! print results of the iteration in pcm_info file
+
+    if ( mpi_grp_is_root(mpi_world) ) &
+      write(pcm%info_unit,'(3X,I5,5X,F20.8,5X,F20.8,5X,F20.8,5X,F20.8,5X,F20.8,5X,F20.8,5X,F20.8,5X,F20.8,5X,F20.8)') &
+                              pcm%counter, &
+                              units_from_atomic(units_out%energy, E_int_ee ), & 
+                              units_from_atomic(units_out%energy, E_int_en ), &
+                              units_from_atomic(units_out%energy, E_int_nn ), &
+                              units_from_atomic(units_out%energy, E_int_ne ), &
+                              units_from_atomic(units_out%energy, E_int_ee +  &
+                                                                  E_int_en +  &
+                                                                  E_int_nn +  &
+                                                                  E_int_ne ), &
+                               (pcm%epsilon_0/(pcm%epsilon_0-M_ONE))*pcm%qtot_e, &
+                                                                   pcm%deltaQ_e, &
+                               (pcm%epsilon_0/(pcm%epsilon_0-M_ONE))*pcm%qtot_n, &
+                                                                   pcm%deltaQ_n
+
 
     POP_SUB(pcm_elect_energy)
   end subroutine pcm_elect_energy
@@ -705,17 +980,27 @@ contains
   !> Calculates the polarization charges at each tessera by using the response matrix 'pcm_mat',
   !! provided the value of the molecular electrostatic potential at 
   !! the tesserae: q_pcm(ia) = \sum_{ib}^{n_tess} pcm_mat(ia,ib)*v_cav(ib).
-  subroutine pcm_charges(q_pcm, q_pcm_tot, v_cav, pcm_mat, n_tess)
+  subroutine pcm_charges(q_pcm, q_pcm_tot, v_cav, pcm_mat, n_tess, &
+                         qtot_nominal, epsilon, renorm_charges, q_tot_tol, deltaQ)
     FLOAT,   intent(out)   :: q_pcm(:)     !< (1:n_tess)
     FLOAT,   intent(out)   :: q_pcm_tot
     FLOAT,   intent(in)    :: v_cav(:)     !< (1:n_tess)
     FLOAT,   intent(in)    :: pcm_mat(:,:) !< (1:n_tess, 1:n_tess)
     integer, intent(in)    :: n_tess
+    FLOAT,   intent(in)    :: qtot_nominal
+    FLOAT,   intent(in)    :: epsilon
+    logical, intent(in)    :: renorm_charges
+    FLOAT,   intent(in)    :: q_tot_tol
 
     integer :: ia, ib
+    type(profile_t), save :: prof_init
+    FLOAT :: deltaQ
+    FLOAT :: q_pcm_tot_norm
+    FLOAT :: coeff
 
     PUSH_SUB(pcm_charges)
-
+    call profiling_in(prof_init, 'PCM_CHARGES') 
+    
     q_pcm     = M_ZERO
     q_pcm_tot = M_ZERO
 
@@ -726,19 +1011,305 @@ contains
       q_pcm_tot = q_pcm_tot + q_pcm(ia)
     end do
 
+    ! renormalization of the polarization charges to enforce fulfillment of the Gauss law.
+    deltaQ = ABS(q_pcm_tot) - ( (epsilon-CNST(1.0))/epsilon )*ABS(qtot_nominal)
+    if ( (renorm_charges).and.(ABS(deltaQ) > q_tot_tol) ) then
+        q_pcm_tot_norm = M_ZERO
+        coeff = sign(CNST(1.0), qtot_nominal)*sign(CNST(1.0), deltaQ)
+        do ia = 1, n_tess
+          q_pcm(ia) = q_pcm(ia) + coeff*q_pcm(ia)/q_pcm_tot*ABS(deltaQ)
+          q_pcm_tot_norm = q_pcm_tot_norm + q_pcm(ia)
+        end do
+        q_pcm_tot = q_pcm_tot_norm
+    endif
+
+    call profiling_out(prof_init)
+    
     POP_SUB(pcm_charges)
   end subroutine pcm_charges
 
-  ! -----------------------------------------------------------------------------
+  ! -----------------------------------------------------------------------------    
+  !> Check wether the nearest neighbor requested are in the mesh or not
+  logical function pcm_nn_in_mesh(pcm, mesh) result(in_mesh)
+      type(pcm_t),     intent(in) :: pcm 
+      type(mesh_t),    intent(in) :: mesh
+
+      integer :: ia, nm(1:MAX_DIM), ipt, npt, i1, i2, i3
+      FLOAT :: posrel(1:MAX_DIM)
+      integer :: pt
+      
+      PUSH_SUB(pcm_nn_in_mesh)
   
+      in_mesh = .true.
+      do ia = 1, pcm%n_tesserae
+  
+        posrel(1:mesh%sb%dim) = pcm%tess(ia)%point(1:mesh%sb%dim)/mesh%spacing(1:mesh%sb%dim)
+
+        nm(1:mesh%sb%dim) = floor(posrel(1:mesh%sb%dim))
+  
+        ! Get the nearest neighboring points
+        ipt = 0
+        do i1 = -pcm%tess_nn +1 , pcm%tess_nn
+          do i2 = -pcm%tess_nn +1 , pcm%tess_nn
+            do i3 = -pcm%tess_nn +1 , pcm%tess_nn
+              ipt = ipt+1
+              pt = mesh%idx%lxyz_inv(i1 + nm(1), i2 + nm(2), i3 + nm(3))
+
+              if (pt <= 0 .or. pt > mesh%np_part_global) then 
+                in_mesh = .false.
+                POP_SUB(pcm_nn_in_mesh)
+                return 
+              end if 
+          
+            end do
+          end do
+        end do
+      end do 
+
+      POP_SUB(pcm_nn_in_mesh)
+    
+    end function pcm_nn_in_mesh
+  
+  ! -----------------------------------------------------------------------------  
+  !> Check that all the required nearest neighbors are prensent in the mesh
+  subroutine pcm_poisson_sanity_check(pcm, mesh)
+    type(pcm_t),     intent(in) :: pcm 
+    type(mesh_t),    intent(in) :: mesh
+    
+    
+    integer :: ia, nm(1:MAX_DIM), ipt, npt, i1, i2, i3
+    FLOAT :: posrel(1:MAX_DIM)
+    integer :: pt
+    
+    PUSH_SUB(pcm_poisson_sanity_check)
+
+    if ( .not. pcm_nn_in_mesh(pcm, mesh) ) then 
+      message(1) = 'The simulation box is too small to contain all the requested'
+      message(2) = 'nearest neighbors for each tessera.'
+      message(3) = 'Consider using a larger box or reduce PCMChargeSmearNN.'
+      call messages_warning(3)
+    end if 
+    
+    POP_SUB(pcm_poisson_sanity_check)
+    
+  end subroutine pcm_poisson_sanity_check
+  
+  ! -----------------------------------------------------------------------------  
+  !> Generates the polarization charge density smearing the charge with a gaussian 
+  !> distribution on the mesh nearest neighboring points   of each tessera.
+  subroutine pcm_charge_density(pcm, q_pcm, q_pcm_tot, mesh, rho)
+    type(pcm_t),     intent(inout) :: pcm 
+    FLOAT,           intent(in)    :: q_pcm(:)     !< (1:n_tess)
+    FLOAT,           intent(in)    :: q_pcm_tot
+    type(mesh_t),    intent(in)    :: mesh
+    FLOAT,           intent(out)   :: rho(:)
+    
+    
+    integer :: ia
+    FLOAT   :: Norm, qtot, RR, XX(1:MAX_DIM), PP(1:MAX_DIM)
+    
+    ! nearest neighbor variables 
+    integer :: nm(1:MAX_DIM), ipoint
+    FLOAT :: posrel(1:MAX_DIM)
+    integer :: npt, ipt
+    integer :: i1, i2, i3
+    integer, ALLOCATABLE :: pt(:)  
+    FLOAT,   ALLOCATABLE :: lrho(:) ! local charge density on a tessera NN 
+    logical :: inner_point, boundary_point
+    
+    !profiling and debug 
+    type(profile_t), save :: prof_init
+    integer  :: ierr
+
+    
+    PUSH_SUB(pcm_charge_density)
+
+    call profiling_in(prof_init, 'PCM_CHARGE_DENSITY') 
+    
+
+    npt = (2*pcm%tess_nn)**mesh%sb%dim
+    SAFE_ALLOCATE(pt(1:npt))
+    SAFE_ALLOCATE(lrho(1:npt))
+
+    pt = 0 
+    rho = M_ZERO
+    
+    do ia = 1, pcm%n_tesserae
+      
+      PP(1:mesh%sb%dim) = pcm%tess(ia)%point(1:mesh%sb%dim)
+      posrel(1:mesh%sb%dim) = PP(1:mesh%sb%dim)/mesh%spacing(1:mesh%sb%dim)
+
+      nm(1:mesh%sb%dim) = floor(posrel(1:mesh%sb%dim))
+      
+      ! Get the nearest neighboring points
+      ipt = 0
+      do i1 = -pcm%tess_nn +1 , pcm%tess_nn
+        do i2 = -pcm%tess_nn +1 , pcm%tess_nn
+          do i3 = -pcm%tess_nn +1 , pcm%tess_nn
+            ipt = ipt+1
+            pt(ipt) = mesh%idx%lxyz_inv(i1 + nm(1), i2 + nm(2), i3 + nm(3))
+          end do
+        end do
+      end do
+      
+      
+      ! Extrapolate the tessera point charge with a gaussian distritibution
+      ! to the neighboring points 
+      ! rho(r) = N exp(-|r-sk|^2/(alpha*Ak))
+      Norm = 0 
+      lrho = 0
+      do ipt = 1, npt
+        
+        ! Check the point is inside the mesh skip otherwise
+        if (pt(ipt) > 0 .and. pt(ipt) <= mesh%np_part_global) then
+          
+          if(mesh%parallel_in_domains) then
+            pt(ipt) = vec_global2local(mesh%vp, pt(ipt), mesh%vp%partno)
+            boundary_point = pt(ipt) > mesh%np + mesh%vp%np_ghost
+            inner_point = pt(ipt) > 0 .and. pt(ipt) <= mesh%np
+
+            if(boundary_point .or. inner_point) then
+              XX(1:mesh%sb%dim) = mesh%x(pt(ipt),1:mesh%sb%dim)
+            else 
+              cycle
+            end if
+          
+          else
+            XX(1:mesh%sb%dim) = mesh%x(pt(ipt),1:mesh%sb%dim)
+          end if
+        
+          RR = sum((XX(1:mesh%sb%dim) - PP(1:mesh%sb%dim))**2)
+          Norm = Norm + exp(-RR/(pcm%tess(ia)%area*pcm%gaussian_width))
+          lrho(ipt) = lrho(ipt) + exp(-RR/(pcm%tess(ia)%area*pcm%gaussian_width))
+          
+        end if 
+      end do
+
+      ! reduce the local density scattered among nodes
+      call comm_allreduce(mesh%mpi_grp%comm, lrho, npt)
+      
+      ! Normalize the integral to the tessera point charge q_pcm(ia)
+      Norm = sum(lrho(1:npt)) * mesh%volume_element
+      if (Norm > M_EPSILON) then
+        Norm = q_pcm(ia)/Norm     
+      else   
+        Norm = M_ZERO
+      end if
+      lrho(:) = lrho(:) * Norm
+
+      ! Add up the local density to the full charge density 
+      do ipt = 1, npt
+        
+        if (pt(ipt) > 0 .and. pt(ipt) <= mesh%np_part_global) then
+        
+          if(mesh%parallel_in_domains) then
+               boundary_point = pt(ipt) > mesh%np + mesh%vp%np_ghost
+               inner_point = pt(ipt) > 0 .and. pt(ipt) <= mesh%np
+               if(boundary_point .or. inner_point) rho(pt(ipt)) = rho(pt(ipt)) + lrho(ipt)
+          else
+               rho(pt(ipt)) = rho(pt(ipt)) + lrho(ipt)           
+          end if
+          
+        end if
+      end do
+            
+    end do 
+
+    
+
+    if (debug%info) then  
+      qtot = dmf_integrate(mesh, rho)
+      call messages_write(' PCM charge density integrates to q = ')
+      call messages_write(qtot)
+      call messages_write(' (qtot = ')
+      call messages_write(q_pcm_tot)
+      call messages_write(')')
+      call messages_info()
+      
+      !   Keep this here for debug purposes.    
+      call dio_function_output(io_function_fill_how("VTK"), &
+                              ".", "rho_pcm",  mesh, rho, unit_one, ierr)
+    end if  
+
+    SAFE_DEALLOCATE_A(pt)
+    SAFE_DEALLOCATE_A(lrho)
+    
+    call profiling_out(prof_init)
+    
+    POP_SUB(pcm_charge_density)
+  end subroutine pcm_charge_density
+
+
+  ! -----------------------------------------------------------------------------  
   !> Generates the potential 'v_pcm' in real-space.
-  subroutine pcm_pot_rs(v_pcm, q_pcm, tess, n_tess, mesh, width_factor)
+  subroutine pcm_pot_rs(pcm, v_pcm, q_pcm, rho, mesh)
+    type(pcm_t),     intent(inout) :: pcm 
+    FLOAT,           intent(inout) :: v_pcm(:)!< (1:mesh%np) running serially np=np_global
+    FLOAT,           intent(in)    :: q_pcm(:)!< (1:n_tess)
+    FLOAT,           intent(inout) :: rho(:)
+    type(mesh_t),    intent(in)    :: mesh
+
+    type(profile_t), save :: prof_init
+    integer  :: ierr
+
+    PUSH_SUB(pcm_pot_rs)
+
+    call profiling_in(prof_init, 'PCM_POT_RS') 
+    
+    v_pcm = M_ZERO
+
+
+    select case(pcm%calc_method)
+    case(PCM_CALC_DIRECT)
+      call pcm_pot_rs_direct(v_pcm, q_pcm, pcm%tess, pcm%n_tesserae, mesh, pcm%gaussian_width)
+
+    case(PCM_CALC_POISSON)
+      call pcm_pot_rs_poisson(pcm, v_pcm, rho, mesh)
+    case default
+
+      message(1) = "BAD BAD BAD"
+      call messages_fatal(1,only_root_writes = .true.)
+
+    end select
+    
+    
+    if (debug%info) then  
+      !   Keep this here for debug purposes.    
+      call dio_function_output(io_function_fill_how("VTK"), &
+                              ".", "v_pcm",  mesh, v_pcm, unit_one, ierr)
+    end if  
+    
+    call profiling_out(prof_init)
+
+    POP_SUB(pcm_pot_rs)
+  end subroutine pcm_pot_rs
+
+  
+  ! -----------------------------------------------------------------------------  
+  !> Generates the potential 'v_pcm' in real-space solving the poisson equation for rho
+  subroutine pcm_pot_rs_poisson(pcm, v_pcm, rho, mesh)
+    type(pcm_t),   intent(inout) :: pcm 
+    FLOAT,         intent(inout) :: v_pcm(:)
+    FLOAT,         intent(inout) :: rho(:)
+    type(mesh_t),     intent(in) :: mesh
+      
+    PUSH_SUB(pcm_pot_rs_poisson)
+    
+        call dpoisson_solve(psolver, v_pcm, rho)
+    
+    POP_SUB(pcm_pot_rs_poisson)
+  end subroutine pcm_pot_rs_poisson
+  
+
+  ! -----------------------------------------------------------------------------  
+  !> Generates the potential 'v_pcm' in real-space by direct sum.
+  subroutine pcm_pot_rs_direct(v_pcm, q_pcm, tess, n_tess, mesh, width_factor)
     FLOAT,           intent(out) :: v_pcm(:)!< (1:mesh%np) running serially np=np_global
     FLOAT,           intent(in)  :: q_pcm(:)!< (1:n_tess)
     FLOAT,           intent(in)  :: width_factor
     integer,         intent(in)  :: n_tess  
     type(mesh_t),    intent(in)  :: mesh
-    type(tessera_t), intent(in)  :: tess(:) !< (1:n_tess)
+    type(pcm_tessera_t), intent(in)  :: tess(:) !< (1:n_tess)
 
     FLOAT, parameter :: p_1 = CNST(0.119763)
     FLOAT, parameter :: p_2 = CNST(0.205117)
@@ -749,39 +1320,48 @@ contains
     integer 	     :: ip
     integer          :: ia
 
-    PUSH_SUB(pcm_pot_rs)
+    PUSH_SUB(pcm_pot_rs_direct)
 
     v_pcm = M_ZERO
 
     if (width_factor /= M_ZERO) then
-
-      do ia = 1, n_tess
-        do ip = 1, mesh%np !running serially np=np_global
-          arg = sr_dist(ia,ip)/sqrt( tess(ia)%area*width_factor )        
-          term = ( 1 + p_1*arg + p_2*arg**2 )/( 1 + q_1*arg + q_2*arg**2 + p_2*arg**3 )
-          v_pcm(ip) = v_pcm(ip) + q_pcm(ia)*term/sqrt( tess(ia)%area*width_factor ) !< regularized PCM field
-        end do
+     !< regularized PCM field
+     do ia = 1, n_tess
+      do ip = 1, mesh%np
+        ! Computing the distances between tesserae and grid points.
+        call mesh_r(mesh, ip, term, origin=tess(ia)%point)
+        arg = term/sqrt( tess(ia)%area*width_factor )        
+        term = ( 1 + p_1*arg + p_2*arg**2 )/( 1 + q_1*arg + q_2*arg**2 + p_2*arg**3 )
+        v_pcm(ip) = v_pcm(ip) + q_pcm(ia)*term/sqrt( tess(ia)%area*width_factor )
       end do
-      v_pcm = M_TWO*v_pcm/sqrt(M_Pi)
+     end do
+ 
+     v_pcm = M_TWO*v_pcm/sqrt(M_Pi)
 
     else
-
-      do ia = 1, n_tess
-        do ip = 1, mesh%np !running serially np=np_global
-          v_pcm(ip) = v_pcm(ip) + q_pcm(ia)/sr_dist(ia,ip) !< standard PCM field
-        end do
+     !< standard PCM field
+     do ia = 1, n_tess
+      do ip = 1, mesh%np
+        ! Computing the distances between tesserae and grid points.
+        call mesh_r(mesh, ip, term, origin=tess(ia)%point)
+        v_pcm(ip) = v_pcm(ip) + q_pcm(ia)/term         
       end do
+     end do     
+    endif
+    
 
-    end if
-    POP_SUB(pcm_pot_rs)
-  end subroutine pcm_pot_rs
+    POP_SUB(pcm_pot_rs_direct)
+  end subroutine pcm_pot_rs_direct
+
+
+
 
   ! -----------------------------------------------------------------------------
   
   !> Generates the PCM response matrix. J. Tomassi et al. Chem. Rev. 105, 2999 (2005). 
   subroutine pcm_matrix(eps, tess, n_tess, pcm_mat )
     FLOAT, intent(in)           :: eps
-    type(tessera_t), intent(in) :: tess(:)      !< (1:n_tess)
+    type(pcm_tessera_t), intent(in) :: tess(:)      !< (1:n_tess)
     integer, intent(in)         :: n_tess
     FLOAT, intent(out)          :: pcm_mat(:,:) !< (1:n_tess, 1:n_tess)
 
@@ -869,9 +1449,11 @@ contains
     pcm_mat = -pcm_mat
 
     !   Testing
-    do i=1, n_tess
-      mat_gamess(i,:) = pcm_mat(i,:)/tess(i)%area
-    end do
+    if ( gamess_benchmark ) then
+      do i=1, n_tess
+        mat_gamess(i,:) = pcm_mat(i,:)/tess(i)%area
+      end do
+    end if
 
     POP_SUB(pcm_matrix)
 
@@ -881,7 +1463,7 @@ contains
   
   subroutine s_i_matrix(n_tess, tess)
     integer,         intent(in)    :: n_tess
-    type(tessera_t), intent(in)    :: tess(:)
+    type(pcm_tessera_t), intent(in)    :: tess(:)
 
     integer :: ii, jj
 
@@ -902,7 +1484,7 @@ contains
 
   subroutine d_i_matrix(n_tess, tess)
     integer,         intent(in)    :: n_tess
-    type(tessera_t), intent(in)    :: tess(:)
+    type(pcm_tessera_t), intent(in)    :: tess(:)
 
     integer :: ii, jj
 
@@ -923,8 +1505,8 @@ contains
   !> electrostatic Green function in vacuo:
   !! G_I(r,r^\prime) = 1 / | r - r^\prime |
   FLOAT function s_mat_elem_I(tessi, tessj)
-    type(tessera_t), intent(in) :: tessi
-    type(tessera_t), intent(in) :: tessj
+    type(pcm_tessera_t), intent(in) :: tessi
+    type(pcm_tessera_t), intent(in) :: tessj
 
     FLOAT, parameter :: M_SD_DIAG    = CNST(1.0694)
     FLOAT, parameter :: M_DIST_MIN   = CNST(0.1)
@@ -961,8 +1543,8 @@ contains
 
   !> Gradient of the Green function in vacuo GRAD[G_I(r,r^\prime)]
   FLOAT function d_mat_elem_I(tessi, tessj)
-    type(tessera_t), intent(in) :: tessi
-    type(tessera_t), intent(in) :: tessj
+    type(pcm_tessera_t), intent(in) :: tessi
+    type(pcm_tessera_t), intent(in) :: tessj
 
     FLOAT, parameter :: M_SD_DIAG    = CNST(1.0694)
     FLOAT, parameter :: M_DIST_MIN   = CNST(0.04)
@@ -1006,14 +1588,14 @@ contains
   !! representative points and areas of the tesserae by using the 
   !! Gauss-Bonnet theorem.
   subroutine cav_gen(i_count, tess_sphere, nesf, sfe, nts, cts, unit_pcminfo)
-    integer, intent(in)  :: i_count
-    integer, intent(in)  :: tess_sphere
-    integer, intent(in)  :: nesf
-    integer, intent(out) :: nts
-    integer, intent(in)  :: unit_pcminfo
+    integer,              intent(in)    :: i_count
+    integer,              intent(in)    :: tess_sphere
+    type(pcm_sphere_t),   intent(inout) :: sfe(:) !< (1:pcm%n_spheres)
+    integer,              intent(in)    :: nesf
+    integer,              intent(out)   :: nts
+    type(pcm_tessera_t),  intent(out)   :: cts(:) !< (1:pcm%n_tesserae)
+    integer,              intent(in)    :: unit_pcminfo
 
-    type(sphere_t),   intent(inout) :: sfe(:) !< (1:pcm%n_spheres)
-    type(tessera_t),  intent(out)   :: cts(:) !< (1:pcm%n_tesserae)
 
     integer, parameter :: dim_angles = 24
     integer, parameter :: dim_ten = 10
@@ -1135,7 +1717,7 @@ contains
       118, 112, 122, 29, 28, 118, 119, 113, 122, 30, 29, 119, 120,   &
       114, 122, 31, 30, 120, 121, 115, 122, 27, 31, 121, 117, 116 /
 
-    if (i_count == 0) then
+    if (i_count == 0 .and.  mpi_grp_is_root(mpi_world)) then
       if (tess_sphere == 1) then
         write(unit_pcminfo,'(A1)')  '#' 
         write(unit_pcminfo,'(A34)') '# Number of tesserae / sphere = 60'
@@ -1316,9 +1898,10 @@ contains
 
             if (rij > test2) cycle
 
-            write(unit_pcminfo,'(A40,I4,A5,I4,A4,F8.4,A13,F8.4,A3)' ) &
-              '# Warning: The distance between tesserae', &
-              ia,' and ', ja,' is ',sqrt(rij),' A, less than', test,' A.'
+            if ( mpi_grp_is_root(mpi_world) ) &
+              write(unit_pcminfo,'(A40,I4,A5,I4,A4,F8.4,A13,F8.4,A3)' ) &
+                '# Warning: The distance between tesserae', &
+                ia,' and ', ja,' is ',sqrt(rij),' A, less than', test,' A.'
 
             !> calculating the coordinates of the new tessera weighted by the areas
             xi = (xi*cts(ia)%area + xj*cts(ja)%area) / (cts(ia)%area + cts(ja)%area)
@@ -1361,11 +1944,13 @@ contains
         stot = stot + cts(its)%area
       end do
 
-      write(unit_pcminfo, '(A2)')  '# '
-      write(unit_pcminfo, '(A29,I4)')    '# Total number of tesserae = ', nts
-      write(unit_pcminfo, '(A30,F12.6)') '# Cavity surface area (A^2) = ' , stot
-      write(unit_pcminfo, '(A24,F12.6)') '# Cavity volume (A^3) = '       , vol
-      write(unit_pcminfo, '(A2)')  '# '
+      if ( mpi_grp_is_root(mpi_world) ) then
+        write(unit_pcminfo, '(A2)')  '# '
+        write(unit_pcminfo, '(A29,I4)')    '# Total number of tesserae = ', nts
+        write(unit_pcminfo, '(A30,F12.6)') '# Cavity surface area (A^2) = ' , stot
+        write(unit_pcminfo, '(A24,F12.6)') '# Cavity volume (A^3) = '       , vol
+        write(unit_pcminfo, '(A2)')  '# '
+      end if
 
       !> transforms results into Bohr.
       cts(:)%area     = cts(:)%area*P_Ang*P_Ang
@@ -1391,7 +1976,7 @@ contains
   !> find the uncovered region for each tessera and computes the area,
   !! the representative point (pp) and the unitary normal vector (pp1)
   subroutine subtessera(sfe, ns, nesf, nv, pts, ccc, pp, pp1, area)
-    type(sphere_t), intent(in) :: sfe(:) !< (1:nesf)
+    type(pcm_sphere_t), intent(in) :: sfe(:) !< (1:nesf)
     integer, intent(in)        :: ns 
     integer, intent(in)        :: nesf
     integer, intent(inout)     :: nv
@@ -1479,7 +2064,10 @@ contains
         end if
       end do
 
-      if (icop == nv) return
+      if (icop == nv) then 
+        POP_SUB(subtessera)
+        return
+      end if
 
       do ll = 1, nv
         iv1 = ll
@@ -1522,7 +2110,10 @@ contains
         if (ltyp(ll) == 3) icut = icut + 2
       end do
       icut = icut / 2
-      if (icut > 1) return
+      if (icut > 1) then 
+        POP_SUB(subtessera)
+        return
+      end if
 
       na = 1
       do ll = 1, nv
@@ -1635,7 +2226,7 @@ contains
   !    !! which is on the surface of sphere 'ns'. p4 is a linear combination 
   !! of p1 and p2 with the 'alpha' parameter optimized iteratively.
   subroutine inter( sfe, p1, p2, p3, p4, ns, ia)
-    type(sphere_t), intent(in) :: sfe(:) !< (1:nesf)
+    type(pcm_sphere_t), intent(in) :: sfe(:) !< (1:nesf)
     FLOAT, intent(in)          :: p1(:)  !< (1:pcm_dim_space)
     FLOAT, intent(in)          :: p2(:)  !< (1:pcm_dim_space)
     FLOAT, intent(in)          :: p3(:)  !< (1:pcm_dim_space)
@@ -1709,7 +2300,7 @@ contains
   !! T(n): azimuthal angle for the side 'n'
   !! Beta(n): external angle respect to vertex 'n'.
   subroutine gaubon( sfe, nv, ns, pts, ccc, pp, pp1, area, intsph )
-    type(sphere_t), intent(in) :: sfe(:)    !< (1:nesf)
+    type(pcm_sphere_t), intent(in) :: sfe(:)    !< (1:nesf)
     FLOAT, intent(in)          :: pts(:,:)  !< (1:pcm_dim_space,1:dim_ten) 
     FLOAT, intent(in)          :: ccc(:,:)  !< (1:pcm_dim_space,1:dim_ten)
     FLOAT, intent(inout)       :: pp(:)     !< (1:pcm_dim_space)
@@ -1871,16 +2462,100 @@ contains
     SAFE_DEALLOCATE_A(pcm%v_n)
     SAFE_DEALLOCATE_A(pcm%v_e_rs)
     SAFE_DEALLOCATE_A(pcm%v_n_rs)
-    SAFE_DEALLOCATE_A(pcm%ind_vh)
-    SAFE_DEALLOCATE_A(pcm%arg_li)
-    SAFE_DEALLOCATE_A(sr_dist) 
+!     cSAFE_DEALLOCATE_A(pcm%ind_vh)
+!     cSAFE_DEALLOCATE_A(pcm%arg_li)
 
-    call io_close(pcm%info_unit)
+    if (pcm%calc_method == PCM_CALC_POISSON) then
+      SAFE_DEALLOCATE_A( pcm%rho_n)
+      SAFE_DEALLOCATE_A( pcm%rho_e)
+    end if 
+
+
+    if ( mpi_grp_is_root(mpi_world) ) call io_close(pcm%info_unit)
 
     POP_SUB(pcm_end)
   end subroutine pcm_end
 
-end module pcm_m
+  ! -----------------------------------------------------------------------------
+  !> Update pcm potential
+  logical function pcm_update(this, time) result(update)
+      type(pcm_t), intent(inout) :: this
+      FLOAT,       intent(in)    :: time
+
+      this%iter = this%iter + 1 
+      update = (this%iter <= 6 .or. mod(this%iter, this%update_iter) == 0)
+      
+      if (debug%info .and. update) then
+        call messages_write(' PCM potential updated')
+        call messages_new_line()
+        call messages_write(' PCM update iteration counter: ')
+        call messages_write(this%iter)
+        call messages_info()
+      end if
+
+    end function pcm_update
+
+  ! -----------------------------------------------------------------------------
+  !> get the vdw radius
+  FLOAT function pcm_get_vdw_radius(species, pcm_vdw_type)  result(vdw_r)
+      type(species_t), intent(in) :: species
+      integer,         intent(in) :: pcm_vdw_type
+  
+      integer            :: ia
+      integer, parameter :: upto_Xe = 54
+      FLOAT              :: vdw_radii(1:upto_Xe) !< van der Waals radii in Angstrom for elements H-Xe reported 
+         !  by Stefan Grimme in J. Comput. Chem. 27: 1787-1799, 2006 
+         !  except for C, N and O, reported in J. Chem. Phys. 120, 3893 (2004). 
+      data (vdw_radii(ia), ia=1, upto_Xe)                                                                                  / &
+       !H                                                                                                       He 
+        CNST(1.001),                                                                                            CNST(1.012), &
+       !Li           Be                        B            C            N            O            F            Ne
+        CNST(0.825), CNST(1.408),              CNST(1.485), CNST(2.000), CNST(1.583), CNST(1.500), CNST(1.287), CNST(1.243), & 
+       !Na           Mg                        Al           Si           P            S            Cl           Ar 
+        CNST(1.144), CNST(1.364),              CNST(1.639), CNST(1.716), CNST(1.705), CNST(1.683), CNST(1.639), CNST(1.595), & 
+       !K            Ca 
+        CNST(1.485), CNST(1.474),                                                                                            & 
+       !>      Sc -- Zn       <!                                        
+        CNST(1.562), CNST(1.562),                                                                    & 
+        CNST(1.562), CNST(1.562),                                                                    & 
+        CNST(1.562), CNST(1.562),                                                                    & 
+        CNST(1.562), CNST(1.562),                                                                    & 
+        CNST(1.562), CNST(1.562),                                                                  & 
+       !Ga           Ge           As           Se           Br           Kr  
+        CNST(1.650), CNST(1.727), CNST(1.760), CNST(1.771), CNST(1.749), CNST(1.727), & 
+                                  !Rb           Sr           !>      Y -- Cd        <!                                        
+        CNST(1.628), CNST(1.606), CNST(1.639), CNST(1.639),                                                                  & 
+        CNST(1.639), CNST(1.639),                                                            & 
+        CNST(1.639), CNST(1.639),                                                            & 
+        CNST(1.639), CNST(1.639),                                                                  & 
+        CNST(1.639), CNST(1.639),                                                                  & 
+       !In                  Sn           Sb           Te           I            Xe 
+        CNST(2.672), CNST(1.804), CNST(1.881), CNST(1.892), CNST(1.892), CNST(1.881)  / 
+
+        select case (pcm_vdw_type)
+
+        case (PCM_VDW_OPTIMIZED)
+          if (species_z(species) > upto_Xe) then
+             write(message(1),'(a,a)') "The van der Waals radius is missing for element ", trim(species_label(species))
+             write(message(2),'(a)') "Use PCMVdWRadii = pcm_vdw_species, for other vdw radii values" 
+             call messages_fatal(2)
+          end if
+          ia = species_z(species)
+          vdw_r = vdw_radii(ia)*P_Ang
+
+        case (PCM_VDW_SPECIES)
+          vdw_r = species_vdw_radius(species)
+          if(vdw_r< CNST(0.0)) then
+            call messages_write('The default vdW radius for species '//trim(species_label(species))//':')
+            call messages_write(' is not defined. ')
+            call messages_write(' Add a positive vdW radius value in %Species block. ')
+            call messages_fatal()
+          end if
+        end select
+
+  end function pcm_get_vdw_radius
+
+end module pcm_oct_m
 
 !! Local Variables:
 !! mode: f90

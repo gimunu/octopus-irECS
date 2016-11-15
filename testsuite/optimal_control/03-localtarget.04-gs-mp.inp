@@ -1,5 +1,5 @@
 # -*- coding: utf-8 mode: shell-script -*-
-# $Id: 03-localtarget.04-gs-mp.inp 13978 2015-05-14 16:03:03Z xavier $
+# $Id: 03-localtarget.04-gs-mp.inp 15690 2016-10-25 21:56:26Z xavier $
 
 
 Dimensions = 1
@@ -33,5 +33,7 @@ ExtraStates = 1
 
 ConvRelDens = 1.0e-8
 
+ProfilingMode = prof_time
 
+DisableOpenCL = yes
 

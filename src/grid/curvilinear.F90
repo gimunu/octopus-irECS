@@ -15,26 +15,26 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: curvilinear.F90 13640 2015-03-28 23:49:50Z xavier $
+!! $Id: curvilinear.F90 15287 2016-04-20 09:56:52Z umberto $
 
 #include "global.h"
 
-module curvilinear_m
-  use curv_briggs_m
-  use curv_irecs_m
-  use curv_gygi_m
-  use curv_modine_m
-  use geometry_m
-  use global_m
-  use lalg_adv_m
-  use parser_m
-  use math_m
-  use messages_m
-  use profiling_m
-  use simul_box_m
-  use unit_m
-  use unit_system_m
-  use varinfo_m
+module curvilinear_oct_m
+  use curv_briggs_oct_m
+  use curv_gygi_oct_m
+  use curv_irecs_oct_m
+  use curv_modine_oct_m
+  use geometry_oct_m
+  use global_oct_m
+  use lalg_adv_oct_m
+  use parser_oct_m
+  use math_oct_m
+  use messages_oct_m
+  use profiling_oct_m
+  use simul_box_oct_m
+  use unit_oct_m
+  use unit_system_oct_m
+  use varinfo_oct_m
 
   implicit none
 
@@ -103,7 +103,7 @@ contains
     !% Modine [N.A. Modine, G. Zumbach and E. Kaxiras, <i>Phys. Rev. B</i> <b>55</b>, 10289 (1997)]
     !% (NOT WORKING).
     !%Option curv_irecs 5
-    !% Implements infinite range exterior complex scaling with with exponential grid
+    !% Implements infinite range exterior complex scaling with exponential grid
     !% Scrinzi [M. Weinmuller, M. Weinmuller, J. Rohland, and A. Scrinzi, arXiv:1509.04947 (2015)]
     !%End
     call parse_variable('CurvMethod', CURV_METHOD_UNIFORM, cv%method)
@@ -236,13 +236,12 @@ contains
 
     ! No PUSH_SUB, called too often
 
-    if(cv%method /= CURV_METHOD_UNIFORM) then
-      SAFE_ALLOCATE(Jac(1:sb%dim, 1:sb%dim))
-    end if
+    SAFE_ALLOCATE(Jac(1:sb%dim, 1:sb%dim))
 
     select case(cv%method)
     case(CURV_METHOD_UNIFORM)
-      jdet = sb%volume_element
+      Jac(1:sb%dim, 1:sb%dim) = sb%rlattice_primitive(1:sb%dim, 1:sb%dim)
+      jdet = lalg_determinant(sb%dim, Jac, invert = .false.)      
     case(CURV_METHOD_GYGI)
       call curv_gygi_jacobian(sb, cv%gygi, x, dummy, Jac)
       jdet = M_ONE/lalg_determinant(sb%dim, Jac, invert = .false.)
@@ -263,9 +262,7 @@ contains
       end do
     end select
 
-    if(cv%method /= CURV_METHOD_UNIFORM) then
-      SAFE_DEALLOCATE_A(Jac)
-    end if
+    SAFE_DEALLOCATE_A(Jac)
 
   end function curvilinear_det_Jac
 
@@ -309,7 +306,7 @@ contains
 
   ! ---------------------------------------------------------
 
-end module curvilinear_m
+end module curvilinear_oct_m
 
 !! Local Variables:
 !! mode: f90

@@ -16,7 +16,7 @@
  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
  02110-1301, USA.
 
- $Id: parse.c 14270 2015-06-12 22:18:11Z dstrubbe $
+ $Id: parse.c 15740 2016-11-14 11:00:38Z marques $
 */
 
 #include <stdio.h>
@@ -61,7 +61,12 @@ static int parse_get_line(FILE *f, char **s, int *length)
 	*length *= 2;
 	*s = (char *)realloc(*s, *length + 1);
       }
-      (*s)[i++] = (char)c;
+      /* check for continuation lines */
+      if(i > 0 && c == '\n' && (*s)[i-1] == '\\'){
+        c = 'd'; /* dummy */
+        i--;
+      }else
+        (*s)[i++] = (char)c;
     }
   }while(c != EOF && c != '\n');
   (*s)[i] = '\0';
@@ -92,12 +97,13 @@ int parse_init(const char *file_out, const int *mpiv_node)
   return 0;
 }
 
-int parse_input(const char *file_in)
+int parse_input(const char *file_in, int set_used)
 {
   FILE *f;
   char *s;
   int c, length = 0;
-  
+  parse_result pc;
+
   if(strcmp(file_in, "-") == 0)
     f = stdin;
   else
@@ -107,12 +113,24 @@ int parse_input(const char *file_in)
     return -1; /* error opening file */
   
   /* we now read in the file and parse */
+  /* note: 40 is just a starter length, it is not a maximum */
   length = 40;
   s = (char *)malloc(length + 1);
   do{
     c = parse_get_line(f, &s, &length);
     if(*s){
-      if(*s == '%'){ /* we have a block */
+      if(strncmp("include ", s, 8) == 0 ){ /* include another file */
+	/* wipe out leading 'include' with blanks */
+	strncpy(s, "       ", 7);
+	str_trim(s);
+	if(!disable_write)
+	  fprintf(fout, "# including file '%s'\n", s);
+	c = parse_input(s, 0);
+	if(c != 0) {
+	  fprintf(stderr, "Parser error: cannot open included file '%s'.\n", s);
+	  exit(1);
+	}
+      } else if(*s == '%'){ /* we have a block */
 	*s = ' ';
 	str_trim(s);
 	if(getsym(s) != NULL){ /* error */
@@ -154,7 +172,6 @@ int parse_input(const char *file_in)
 	  }while(c != EOF && *s != '%');
 	}
       }else{ /* we can parse it np */
-	parse_result pc;
 	parse_exp(s, &pc);
       }
     }
@@ -163,12 +180,27 @@ int parse_input(const char *file_in)
   free(s);
   if(f != stdin)
     fclose(f);
+
+  if(set_used == 1)
+    sym_mark_table_used();
+
+  return 0;
+}
+
+/* If *_PARSE_ENV is set, then environment variables beginning with prefix are read and set,
+overriding input file if defined there too. */
+void parse_environment(const char* prefix)
+{
+  char* flag;
+  parse_result pc;
+
+  flag = (char *)malloc(strlen(prefix) + 11);
+  strcpy(flag, prefix);
+  strcat(flag, "PARSE_ENV");
   
-#define OCT_ENV_HEADER "OCT_"
-
-  /*now read options from environment variables (by X) */
-
-  if( getenv("OCT_PARSE_ENV")!=NULL ) {
+  if( getenv(flag)!=NULL ) {
+    if(!disable_write)
+      fprintf(fout, "# %s is set, parsing environment variables\n", flag);
     
     /* environ is an array of C strings with all the environment
        variables, the format of the string is NAME=VALUE, which
@@ -176,19 +208,18 @@ int parse_input(const char *file_in)
     
     char **env = environ;    
     while(*env) {
-      /* Only consider variables that begin with OCT_ */
-      if( strncmp(OCT_ENV_HEADER, *env, strlen(OCT_ENV_HEADER)) == 0 ){	
-	parse_result pc;
-	parse_exp( (*env) + strlen(OCT_ENV_HEADER), &pc);
+      /* Only consider variables that begin with the prefix, except the PARSE_ENV flag */
+      if( strncmp(flag, *env, strlen(flag)) != 0 && strncmp(prefix, *env, strlen(prefix)) == 0 ){	
+	if(!disable_write)
+	  fprintf(fout, "# parsed from environment: %s\n", (*env) + strlen(prefix));
+	parse_exp( (*env) + strlen(prefix), &pc);
       }
       
       env++;
     }
   }
-  
-  sym_clear_reserved();
 
-  return 0;
+  free(flag);
 }
 
 void parse_end()

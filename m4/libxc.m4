@@ -15,7 +15,7 @@
 ## Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 ## 02110-1301, USA.
 ##
-## $Id: libxc.m4 14515 2015-08-26 18:53:07Z xavier $
+## $Id: libxc.m4 15038 2016-01-11 18:20:57Z dstrubbe $
 ##
 
 AC_DEFUN([ACX_LIBXC], [
@@ -130,9 +130,6 @@ if test x"$acx_libxc_ok" = xno; then
 fi
 
 AC_MSG_RESULT([$acx_libxc_ok ($FCFLAGS_LIBXC $LIBS_LIBXC)])
-
-AC_MSG_CHECKING([whether libxc version is > 2.2])
-AC_MSG_RESULT([$acx_libxc_v3])
 
 dnl Finally, execute ACTION-IF-FOUND/ACTION-IF-NOT-FOUND:
 if test x"$acx_libxc_ok" = xyes; then

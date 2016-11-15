@@ -15,15 +15,15 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: functionals.F90 14809 2015-11-21 15:26:00Z askhl $
+!! $Id: functionals.F90 15504 2016-07-20 17:24:08Z askhl $
 
 #include "global.h"
 
-module xc_functl_m
-  use global_m
-  use parser_m
-  use libvdwxc_m
-  use messages_m
+module xc_functl_oct_m
+  use global_oct_m
+  use parser_oct_m
+  use libvdwxc_oct_m
+  use messages_oct_m
   use XC_F90(lib_m)
 
   implicit none
@@ -162,7 +162,7 @@ contains
       functl%type = XC_F90(info_kind)(functl%info)
       functl%flags = XC_F90(info_flags)(functl%info)
       ! Convert Octopus code for functional into corresponding libvdwxc code:
-      call libvdwxc_init(functl%libvdwxc, (functl%id - XC_VDW_C_VDWDF) / 1000 + 1)
+      call libvdwxc_init(functl%libvdwxc, functl%id - XC_VDW_C_VDWDF + 1)
     else if(functl%id == XC_LDA_XC_CMPLX &
       .or. functl%id == XC_PBE_XC_CMPLX &
       .or. functl%id == XC_LB94_XC_CMPLX) then
@@ -437,7 +437,7 @@ contains
     POP_SUB(xc_functl_write_info)
   end subroutine xc_functl_write_info
 
-end module xc_functl_m
+end module xc_functl_oct_m
 
 !! Local Variables:
 !! mode: f90

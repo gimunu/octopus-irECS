@@ -15,22 +15,22 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: utils.F90 14379 2015-06-25 20:05:33Z dstrubbe $
+!! $Id: utils.F90 15478 2016-07-17 15:49:41Z xavier $
 
 #include "global.h"
 
 !> This module is intended to contain simple general-purpose utility functions
 !! and procedures.
 
-module utils_m
-  use global_m
-  use io_m
-  use loct_m
-  use messages_m
-  use mpi_m
-  use unit_m
-  use unit_system_m
-  use string_m
+module utils_oct_m
+  use global_oct_m
+  use io_oct_m
+  use loct_oct_m
+  use messages_oct_m
+  use mpi_oct_m
+  use unit_oct_m
+  use unit_system_oct_m
+  use string_oct_m
 
   implicit none
 
@@ -244,6 +244,9 @@ contains
 #ifdef HAVE_OPENCL
     get_config_opts = trim(get_config_opts)//' opencl'
 #endif
+#ifdef HAVE_CUDA
+    get_config_opts = trim(get_config_opts)//' cuda'
+#endif
 #ifdef HAVE_M128D
     get_config_opts = trim(get_config_opts)//' sse2'
 #endif
@@ -269,11 +272,11 @@ contains
 #ifdef HAVE_BERKELEYGW
     get_optional_libraries = trim(get_optional_libraries)//' berkeleygw'
 #endif
-#ifdef HAVE_CLAMDFFT
+#ifdef HAVE_CLFFT
     get_optional_libraries = trim(get_optional_libraries)//' clamdfft'
 #endif
-#ifdef HAVE_CLAMDBLAS
-    get_optional_libraries = trim(get_optional_libraries)//' clamdblas'
+#ifdef HAVE_CLBLAS
+    get_optional_libraries = trim(get_optional_libraries)//' clblas'
 #endif
 #ifdef HAVE_ETSF_IO
     get_optional_libraries = trim(get_optional_libraries)//' etsf_io'
@@ -299,14 +302,8 @@ contains
 #ifdef HAVE_NETCDF
     get_optional_libraries = trim(get_optional_libraries)//' netcdf'
 #endif
-#ifdef HAVE_NEWUOA
-    get_optional_libraries = trim(get_optional_libraries)//' newuoa'
-#endif
 #ifdef HAVE_NFFT
     get_optional_libraries = trim(get_optional_libraries)//' nfft'
-#endif
-#ifdef HAVE_PAPI
-    get_optional_libraries = trim(get_optional_libraries)//' papi'
 #endif
 #ifdef HAVE_PARMETIS
     get_optional_libraries = trim(get_optional_libraries)//' parmetis'
@@ -328,6 +325,9 @@ contains
 #endif
 #ifdef HAVE_SPARSKIT
     get_optional_libraries = trim(get_optional_libraries)//' sparskit'
+#endif
+#ifdef HAVE_NLOPT
+    get_optional_libraries = trim(get_optional_libraries)//' nlopt'
 #endif
 
   end function get_optional_libraries
@@ -535,7 +535,7 @@ contains
     lead_dim = ubound(array, dim = 1) * ubound(array, dim = 2)
   end function clead_dim2
 
-end module utils_m
+end module utils_oct_m
 
 !! Local Variables:
 !! mode: f90

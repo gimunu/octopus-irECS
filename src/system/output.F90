@@ -15,76 +15,76 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: output.F90 14777 2015-11-16 11:50:24Z jrfsousa $
+!! $Id: output.F90 15722 2016-11-09 13:40:45Z nicolastd $
 
 #include "global.h"
 
-module output_m
-  use base_density_m
-  use base_hamiltonian_m
-  use base_potential_m
-  use base_states_m
-  use basins_m
-  use batch_m
-  use cube_function_m
-  use cube_m
-  use current_m
-  use density_m
-  use derivatives_m
-  use elf_m
+module output_oct_m
+  use base_density_oct_m
+  use base_hamiltonian_oct_m
+  use base_potential_oct_m
+  use base_states_oct_m
+  use basins_oct_m
+  use batch_oct_m
+  use cube_function_oct_m
+  use cube_oct_m
+  use current_oct_m
+  use density_oct_m
+  use derivatives_oct_m
+  use elf_oct_m
 #if defined(HAVE_ETSF_IO)
   use etsf_io
   use etsf_io_tools
 #endif
-  use fft_m
-  use fourier_shell_m
-  use fourier_space_m
-  use geometry_m
-  use global_m
-  use grid_m
-  use hamiltonian_m
-  use io_m
-  use io_function_m
-  use kick_m
-  use kpoints_m
-  use lasers_m
-  use linear_response_m
-  use loct_m
-  use loct_math_m
-  use magnetic_m
-  use mesh_m
-  use mesh_batch_m
-  use mesh_function_m
-  use messages_m
-  use modelmb_density_matrix_m
-  use modelmb_exchange_syms_m
-  use mpi_m
-  use output_fio_m
-  use output_me_m
-  use parser_m
-  use par_vec_m
-  use periodic_copy_m
-  use profiling_m
-  use simul_box_m
-  use smear_m
-  use string_m
-  use species_m
-  use states_m
-  use states_dim_m
-  use states_io_m
-  use symm_op_m
-  use symmetries_m
-  use unit_m
-  use unit_system_m
-  use utils_m
-  use varinfo_m
-  use v_ks_m
-  use vtk_m
+  use fft_oct_m
+  use fourier_shell_oct_m
+  use fourier_space_oct_m
+  use geometry_oct_m
+  use global_oct_m
+  use grid_oct_m
+  use hamiltonian_oct_m
+  use io_oct_m
+  use io_function_oct_m
+  use kick_oct_m
+  use kpoints_oct_m
+  use lasers_oct_m
+  use linear_response_oct_m
+  use loct_oct_m
+  use loct_math_oct_m
+  use magnetic_oct_m
+  use mesh_oct_m
+  use mesh_batch_oct_m
+  use mesh_function_oct_m
+  use messages_oct_m
+  use modelmb_density_matrix_oct_m
+  use modelmb_exchange_syms_oct_m
+  use mpi_oct_m
+  use output_fio_oct_m
+  use output_me_oct_m
+  use parser_oct_m
+  use par_vec_oct_m
+  use periodic_copy_oct_m
+  use profiling_oct_m
+  use simul_box_oct_m
+  use smear_oct_m
+  use string_oct_m
+  use species_oct_m
+  use states_oct_m
+  use states_dim_oct_m
+  use states_io_oct_m
+  use symm_op_oct_m
+  use symmetries_oct_m
+  use unit_oct_m
+  use unit_system_oct_m
+  use utils_oct_m
+  use varinfo_oct_m
+  use v_ks_oct_m
+  use vtk_oct_m
 #if defined(HAVE_BERKELEYGW)
   use wfn_rho_vxc_io_m
 #endif
-  use young_m
-  use xc_m
+  use young_oct_m
+  use xc_oct_m
 
   implicit none
 
@@ -208,9 +208,6 @@ contains
     !%Option ELF_basins bit(7)
     !% Outputs basins of attraction of the ELF. The output file is called
     !% <tt>elf_rs_basins.info</tt>. Only in 2D and 3D.
-    !%Option ELF_FS bit(8)
-    !% Outputs electron localization function in Fourier space (experimental). The output file is called
-    !% <tt>elf_FS-</tt>. Only in 2D and 3D.
     !%Option Bader bit(9)
     !% Outputs Laplacian of the density which shows lone pairs, bonded charge concentrations
     !% and regions subject to electrophilic or nucleophilic attack.
@@ -287,19 +284,14 @@ contains
     !%End
     call parse_variable('Output', 0, outp%what)
 
-    if(iand(outp%what, OPTION__OUTPUT__ELF_FS) /= 0) then
-      call messages_experimental("ELF in Fourier space")
-    end if
-
     if(iand(outp%what, OPTION__OUTPUT__WFS_FOURIER) /= 0) then
       call messages_experimental("Wave-functions in Fourier space")
     end if
 
     ! cannot calculate the ELF in 1D
-    if(iand(outp%what, OPTION__OUTPUT__ELF) /= 0 .or. iand(outp%what, OPTION__OUTPUT__ELF_BASINS) /= 0 &
-       .or. iand(outp%what, OPTION__OUTPUT__ELF_FS) /= 0) then
+    if(iand(outp%what, OPTION__OUTPUT__ELF) /= 0 .or. iand(outp%what, OPTION__OUTPUT__ELF_BASINS) /= 0) then
        if(sb%dim /= 2 .and. sb%dim /= 3) then
-         outp%what = iand(outp%what, not(OPTION__OUTPUT__ELF + OPTION__OUTPUT__ELF_BASINS + OPTION__OUTPUT__ELF_FS))
+         outp%what = iand(outp%what, not(OPTION__OUTPUT__ELF + OPTION__OUTPUT__ELF_BASINS))
          write(message(1), '(a)') 'Cannot calculate ELF except in 2D and 3D.'
          call messages_warning(1)
        end if
@@ -580,8 +572,10 @@ contains
 
     integer :: idir, ierr
     character(len=80) :: fname
+    type(profile_t), save :: prof
     
     PUSH_SUB(output_all)
+    call profiling_in(prof, "OUTPUT_ALL")
 
     if(outp%what /= 0) then
       message(1) = "Info: Writing output to " // trim(dir)
@@ -642,6 +636,7 @@ contains
       call output_fio(gr, geo, st, hm, trim(adjustl(dir)), mpi_world)
     end if
 
+    call profiling_out(prof)
     POP_SUB(output_all)
   end subroutine output_all
 
@@ -680,7 +675,7 @@ contains
       if(iand(outp%what, OPTION__OUTPUT__ELF) /= 0) then
         write(fname, '(a)') 'elf_rs'
         call dio_function_output(outp%how, dir, trim(fname), gr%mesh, &
-          f_loc(:,imax), unit_one, ierr, geo = geo)
+          f_loc(:,imax), unit_one, ierr, geo = geo, grp = mpi_grp)
         ! this quantity is dimensionless
 
         if(st%d%ispin /= UNPOLARIZED) then
@@ -695,17 +690,6 @@ contains
 
       if(iand(outp%what, OPTION__OUTPUT__ELF_BASINS) /= 0) &
         call out_basins(f_loc(:,1), "elf_rs_basins")
-    end if
-
-    ! Second, ELF in Fourier space.
-    if(iand(outp%what, OPTION__OUTPUT__ELF_FS) /= 0) then
-      call elf_calc_fs(st, gr, f_loc)
-      do is = 1, st%d%nspin
-        write(fname, '(a,i1)') 'elf_fs-sp', is
-        call dio_function_output(outp%how, dir, trim(fname), gr%mesh, &
-          f_loc(:,is), unit_one, ierr, geo = geo, grp = mpi_grp)
-        ! this quantity is dimensionless
-      end do
     end if
 
     ! Now Bader analysis
@@ -750,7 +734,7 @@ contains
       call basins_analyze(basins, gr%mesh, ff(:), st%rho, CNST(0.01))
 
       call dio_function_output(outp%how, dir, trim(filename), gr%mesh, &
-        real(basins%map, REAL_PRECISION), unit_one, ierr, geo = geo)
+        real(basins%map, REAL_PRECISION), unit_one, ierr, geo = geo, grp = mpi_grp)
       ! this quantity is dimensionless
 
       write(fname,'(4a)') trim(dir), '/', trim(filename), '.info'
@@ -1289,7 +1273,7 @@ contains
       call write_binary_header(iunit, sheader, 2, st%d%nspin, shell_density%ngvectors, &
         symmetries_number(gr%sb%symm), 0, geo%natoms, &
         gr%sb%kpoints%reduced%npoints, st%nst, ngkmax, ecutrho * M_TWO,  &
-        ecutwfc * M_TWO, FFTgrid, gr%sb%kpoints%nik_axis, gr%sb%kpoints%shifts, &
+        ecutwfc * M_TWO, FFTgrid, gr%sb%kpoints%nik_axis, gr%sb%kpoints%full%shifts, &
         gr%sb%rcell_volume, M_ONE, gr%sb%rlattice, adot, recvol, &
         M_ONE, gr%sb%klattice, bdot, mtrx, tnp, atyp, &
         apos, ngk, gr%sb%kpoints%reduced%weight, gr%sb%kpoints%reduced%red_point, &
@@ -1326,7 +1310,7 @@ contains
 #endif
 #include "output_modelmb_inc.F90"
 
-end module output_m
+end module output_oct_m
 
 !! Local Variables:
 !! mode: f90

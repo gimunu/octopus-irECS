@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: vxc_inc.F90 14976 2016-01-05 14:27:54Z xavier $
+!! $Id: vxc_inc.F90 15307 2016-04-29 14:05:20Z askhl $
 
 subroutine xc_get_vxc(der, xcs, st, rho, ispin, ioniz_pot, qtot, vxc, ex, ec, deltaxc, vtau)
   type(derivatives_t),  intent(in)    :: der             !< Discretization and the derivative operators and details
@@ -71,7 +71,7 @@ subroutine xc_get_vxc(der, xcs, st, rho, ispin, ioniz_pot, qtot, vxc, ex, ec, de
 
   integer :: ib, ip, isp, families, ixc, spin_channels, is, idir, ipstart, ipend
   FLOAT   :: rr, energy(1:2)
-  logical :: gga, mgga
+  logical :: gga, mgga, libvdwxc
   type(profile_t), save :: prof, prof_libxc
   logical :: calc_energy
   type(xc_functl_t), pointer :: functl(:)
@@ -108,14 +108,24 @@ subroutine xc_get_vxc(der, xcs, st, rho, ispin, ioniz_pot, qtot, vxc, ex, ec, de
       ASSERT(iand(functl(ixc)%flags, XC_FLAGS_HAVE_VXC) /= 0)
     end if
   end do
-  
+
   ! initialize a couple of handy variables
-  gga  = iand(xcs%family, XC_FAMILY_GGA + XC_FAMILY_HYB_GGA + XC_FAMILY_MGGA + XC_FAMILY_HYB_MGGA + XC_FAMILY_LIBVDWXC) /= 0
-  mgga = iand(xcs%family, XC_FAMILY_MGGA + XC_FAMILY_HYB_MGGA) /= 0
+  gga  = family_is_gga(xcs%family)
+  mgga = family_is_mgga(xcs%family)
+  if(mgga) then
+    ASSERT(gga)
+  end if
+
+  ! libvdwxc counts as a GGA because it needs the density gradient.
+  ! However it only calls libxc for LDA correlation and therefore
+  ! never initializes l_vsigma in the libxc space/functional loop.
+  ! Thus, it must never use l_vsigma!!  libvdwxc adds its own gradient
+  ! corrections from the nonlocal part afterwards.
+  libvdwxc = iand(xcs%family, XC_FAMILY_LIBVDWXC) /= 0
 
   !Read the spin channels
   spin_channels = functl(FUNC_X)%spin_channels
-  
+
   if(xcs%xc_density_correction == LR_X) then
     SAFE_ALLOCATE(vx(1:der%mesh%np))
   end if
@@ -298,7 +308,7 @@ subroutine xc_get_vxc(der, xcs, st, rho, ispin, ioniz_pot, qtot, vxc, ex, ec, de
         SAFE_DEALLOCATE_A(unp_dedd)
       end if
 
-      if(gga .or. mgga) then
+      if(family_is_gga(functl(ixc)%family).and.functl(ixc)%family /= XC_FAMILY_LIBVDWXC) then
         do ib = 1, n_block
           dedgd(ib + ip - 1,:,1) = dedgd(ib + ip - 1,:,1) + M_TWO*l_vsigma(1, ib)*gdens(ib + ip - 1,:,1)
           if(ispin /= UNPOLARIZED) then
@@ -309,7 +319,9 @@ subroutine xc_get_vxc(der, xcs, st, rho, ispin, ioniz_pot, qtot, vxc, ex, ec, de
         end do
       end if
 
-      if(mgga) then
+      if(family_is_mgga(functl(ixc)%family)) then
+        ! XXXXX does this work correctly when functionals belong to
+        ! different families and only one is mgga?
         call copy_local_to_global(l_dedldens, dedldens, n_block, spin_channels, ip)
         call copy_local_to_global(l_dedtau, vtau, n_block, spin_channels, ip)
       end if
@@ -382,7 +394,7 @@ subroutine xc_get_vxc(der, xcs, st, rho, ispin, ioniz_pot, qtot, vxc, ex, ec, de
   
     call distributed_end(distribution)
   end if
-  
+
   if(functl(FUNC_C)%family == XC_FAMILY_LIBVDWXC) then
     functl(FUNC_C)%libvdwxc%energy = M_ZERO
     call libvdwxc_calculate(functl(FUNC_C)%libvdwxc, dens, gdens, dedd, dedgd)
@@ -426,6 +438,25 @@ subroutine xc_get_vxc(der, xcs, st, rho, ispin, ioniz_pot, qtot, vxc, ex, ec, de
   call profiling_out(prof)
 
 contains
+
+  function family_is_gga(family)
+    integer, intent(in) :: family
+    logical             :: family_is_gga
+
+    PUSH_SUB(xc_get_vxc.family_is_gga)
+    family_is_gga = iand(family, XC_FAMILY_GGA + XC_FAMILY_HYB_GGA + &
+      XC_FAMILY_MGGA + XC_FAMILY_HYB_MGGA + XC_FAMILY_LIBVDWXC) /= 0
+    POP_SUB(xc_get_vxc.family_is_gga)
+  end function  family_is_gga
+
+  function family_is_mgga(family)
+    integer, intent(in) :: family
+    logical             :: family_is_mgga
+
+    PUSH_SUB(xc_get_vxc.family_is_mgga)
+    family_is_mgga = iand(family, XC_FAMILY_MGGA + XC_FAMILY_HYB_MGGA) /= 0
+    POP_SUB(xc_get_vxc.family_is_mgga)
+  end function family_is_mgga
 
   ! ---------------------------------------------------------
   !> make a local copy with the correct memory order for libxc
@@ -1042,9 +1073,8 @@ end function get_qxc
 !> Subroutine to stitch discontinuous values of a multiple-valued function
 !! together to a single continuous, single-valued function by smoothly
 !! joining at the branch cuts.
+!! Each value of the parameter 'branch' corresponds to one such value.
 subroutine stitch(get_branch, functionvalues, startpoint)
-  ! Function for getting values of multiple-valued functions.
-  ! Each value of the parameter 'branch' corresponds to one such value.
   interface
     CMPLX function get_branch(x, branch)
       implicit none
@@ -1061,18 +1091,18 @@ subroutine stitch(get_branch, functionvalues, startpoint)
   imax = size(functionvalues, 1)
   jmax = size(functionvalues, 2)
 
-  call stitchline(get_branch, functionvalues, startpoint, 1)
+  call stitchline(get_branch, functionvalues, startpoint(1), startpoint(2), startpoint(3), 1)
   do i=1, imax
-    call stitchline(get_branch, functionvalues, (/i, startpoint(2), startpoint(3)/), 2)
+    call stitchline(get_branch, functionvalues, i, startpoint(2), startpoint(3), 2)
     do j=1, jmax
-      call stitchline(get_branch, functionvalues, (/i, j, startpoint(3)/), 3)
+      call stitchline(get_branch, functionvalues, i, j, startpoint(3), 3)
     end do
   end do
 end subroutine stitch
 
 
 !> Like stitch, but stitches along one line only.
-subroutine stitchline(get_branch, functionvalues, startpoint, direction, startbranch)
+subroutine stitchline(get_branch, functionvalues, startpoint1, startpoint2, startpoint3, direction, startbranch)
   
   ! Function for getting values of multiple-valued functions.
   ! Each value of the parameter 'branch' corresponds to one such value.
@@ -1085,20 +1115,21 @@ subroutine stitchline(get_branch, functionvalues, startpoint, direction, startbr
   end interface
 
   CMPLX,             intent(inout) :: functionvalues(:, :, :)
-  integer,           intent(in)    :: startpoint(3)
+  integer,           intent(in)    :: startpoint1, startpoint2, startpoint3
   integer, optional, intent(in)    :: direction
   integer, optional, intent(in)    :: startbranch
 
   integer :: stitchedpoints, direction_, startbranch_
   
   integer :: currentbranch, npts, i
-  integer :: currentlocation(3)
+  integer :: startpoint(3), currentlocation(3)
   CMPLX :: prev_value
 
   PUSH_SUB(stitchline)
 
   stitchedpoints = 0
 
+  startpoint = (/startpoint1, startpoint2, startpoint3/)
   currentlocation = startpoint
 
   if (present(direction)) then

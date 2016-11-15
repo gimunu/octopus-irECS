@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: eigen_rmmdiis_inc.F90 14976 2016-01-05 14:27:54Z xavier $
+!! $Id: eigen_rmmdiis_inc.F90 15363 2016-05-12 21:29:04Z xavier $
 
 ! ---------------------------------------------------------
 !> See http://prola.aps.org/abstract/PRB/v54/i16/p11169_1
@@ -302,7 +302,7 @@ subroutine X(eigensolver_rmmdiis) (gr, st, hm, pre, tol, niter, converged, ik, d
 
     prog = prog + bsize
     if(mpi_grp_is_root(mpi_world) .and. .not. debug%info) then
-      call loct_progress_bar(st%nst*(ik - 1) + prog, st%nst*st%d%nik)
+      call loct_progress_bar(st%lnst*(ik - 1) + prog, st%lnst*st%d%kpt%nlocal)
     end if
     
   end do ! ib
@@ -371,8 +371,7 @@ subroutine X(eigensolver_rmmdiis_min) (gr, st, hm, pre, niter, converged, ik)
   integer,                intent(in)    :: ik
 
   integer, parameter :: sweeps = 5
-  integer, parameter :: sd_steps = 2
-
+  integer :: sd_steps
   integer :: isd, ist, minst, maxst, ib, ii
   R_TYPE  :: ca, cb, cc
   R_TYPE, allocatable :: lambda(:), diff(:)
@@ -382,6 +381,8 @@ subroutine X(eigensolver_rmmdiis_min) (gr, st, hm, pre, niter, converged, ik)
 
   PUSH_SUB(X(eigensolver_rmmdiis_min))
 
+  sd_steps = niter
+  
   pack = hamiltonian_apply_packed(hm, gr%mesh)
 
   SAFE_ALLOCATE(me1(1:2, 1:st%d%block_size))
@@ -460,7 +461,7 @@ subroutine X(eigensolver_rmmdiis_min) (gr, st, hm, pre, niter, converged, ik)
     call batch_end(kresb, copy = .false.)
 
     if(mpi_grp_is_root(mpi_world) .and. .not. debug%info) then
-      call loct_progress_bar(st%nst*(ik - 1) +  maxst, st%nst*st%d%nik)
+      call loct_progress_bar(st%lnst*(ik - 1) +  maxst, st%lnst*st%d%kpt%nlocal)
     end if
 
   end do

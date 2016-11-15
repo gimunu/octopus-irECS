@@ -15,43 +15,43 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: eigensolver.F90 14976 2016-01-05 14:27:54Z xavier $
+!! $Id: eigensolver.F90 15407 2016-06-09 11:30:51Z xavier $
 
 #include "global.h"
 
-module eigensolver_m
-  use batch_m
-  use derivatives_m
-  use eigen_arpack_m
-  use eigen_cg_m
-  use eigen_feast_m
-  use eigen_lobpcg_m
-  use eigen_rmmdiis_m
-  use energy_calc_m
-  use exponential_m
-  use global_m
-  use grid_m
-  use hamiltonian_m
-  use lalg_adv_m
-  use lalg_basic_m
-  use loct_m
-  use math_m
-  use mesh_m
-  use mesh_function_m
-  use messages_m
-  use mpi_m
-  use mpi_lib_m
-  use parser_m
-  use preconditioners_m
-  use profiling_m
-  use sort_om
-  use states_m
-  use states_calc_m
-  use states_dim_m
-  use subspace_m
-  use unit_m
-  use unit_system_m
-  use varinfo_m
+module eigensolver_oct_m
+  use batch_oct_m
+  use derivatives_oct_m
+  use eigen_arpack_oct_m
+  use eigen_cg_oct_m
+  use eigen_feast_oct_m
+  use eigen_lobpcg_oct_m
+  use eigen_rmmdiis_oct_m
+  use energy_calc_oct_m
+  use exponential_oct_m
+  use global_oct_m
+  use grid_oct_m
+  use hamiltonian_oct_m
+  use lalg_adv_oct_m
+  use lalg_basic_oct_m
+  use loct_oct_m
+  use math_oct_m
+  use mesh_oct_m
+  use mesh_function_oct_m
+  use messages_oct_m
+  use mpi_oct_m
+  use mpi_lib_oct_m
+  use parser_oct_m
+  use preconditioners_oct_m
+  use profiling_oct_m
+  use sort_oct_m
+  use states_oct_m
+  use states_calc_oct_m
+  use states_dim_oct_m
+  use subspace_oct_m
+  use unit_oct_m
+  use unit_system_oct_m
+  use varinfo_oct_m
 
   implicit none
 
@@ -99,8 +99,9 @@ module eigensolver_m
        RS_LOBPCG  =  8,         &
        RS_RMMDIIS = 10,         &
        RS_ARPACK  = 12,         &
-       RS_FEAST   = 13
-
+       RS_FEAST   = 13,         &
+       RS_PSD      = 14
+  
 contains
 
   subroutine cmplxscl_choose_state_order(eigens, st, gr)
@@ -309,6 +310,8 @@ contains
     !% (Experimental) Implicitly Restarted Arnoldi Method. Requires the ARPACK package.
     !%Option feast 13
     !% (Experimental) Non-Hermitian FEAST eigensolver. Requires the FEAST package.
+    !%Option psd 14
+    !% (Experimental) Precondtioned steepest descent optimization of the eigenvectors.
     !%End
 
     if(st%parallel_in_states) then
@@ -321,7 +324,7 @@ contains
 
     if(st%parallel_in_states .and. .not. eigensolver_parallel_in_states(eigens)) then
       message(1) = "The selected eigensolver is not parallel in states."
-      message(2) = "Please use the lobpcg or rmmdiis eigensolvers."
+      message(2) = "Please use the lobpcg, psd, or rmmdiis eigensolvers."
       call messages_fatal(2)
     end if
 
@@ -428,6 +431,10 @@ contains
       call messages_fatal(1)
 #endif
 
+    case(RS_PSD)
+      default_iter = 18
+      call messages_experimental("preconditioned steepest descent (PSD) eigensolver")
+
     case default
       call messages_input_error('Eigensolver')
     end select
@@ -525,7 +532,7 @@ contains
     PUSH_SUB(eigensolver_end)
 
     select case(eigens%es_type)
-    case(RS_PLAN, RS_CG, RS_LOBPCG, RS_RMMDIIS)
+    case(RS_PLAN, RS_CG, RS_LOBPCG, RS_RMMDIIS, RS_PSD)
       call preconditioner_end(eigens%pre)
 
     case(RS_FEAST)
@@ -566,17 +573,21 @@ contains
     eigens%matvec = 0
 
     if(mpi_grp_is_root(mpi_world) .and. eigensolver_has_progress_bar(eigens) .and. .not. debug%info) then
-      call loct_progress_bar(-1, st%nst*st%d%nik)
+      call loct_progress_bar(-1, st%lnst*st%d%kpt%nlocal)
     end if
 
     ik_loop: do ik = st%d%kpt%start, st%d%kpt%end
       maxiter = eigens%es_maxiter
 
-      if(eigens%converged(ik) == 0 .and. hm%theory_level /= INDEPENDENT_PARTICLES) then
-        if (states_are_real(st)) then
-          call dsubspace_diag(eigens%sdiag, gr%der, st, hm, ik, st%eigenval(:, ik), eigens%diff(:, ik))
-        else
-          call zsubspace_diag(eigens%sdiag, gr%der, st, hm, ik, st%eigenval(:, ik), eigens%diff(:, ik))
+      if(st%calc_eigenval) then
+        if(eigens%es_type == RS_RMMDIIS .or. eigens%es_type /= RS_PSD &
+          .or. (eigens%converged(ik) == 0 .and. hm%theory_level /= INDEPENDENT_PARTICLES)) then
+          
+          if (states_are_real(st)) then
+            call dsubspace_diag(eigens%sdiag, gr%der, st, hm, ik, st%eigenval(:, ik), eigens%diff(:, ik))
+          else
+            call zsubspace_diag(eigens%sdiag, gr%der, st, hm, ik, st%eigenval(:, ik), eigens%diff(:, ik))
+          end if
         end if
       end if
 
@@ -598,6 +609,7 @@ contains
             eigens%converged(ik), ik, eigens%diff(:, ik), hm%d%block_size)
         case(RS_RMMDIIS)
           if(iter <= eigens%rmmdiis_minimization_iter) then
+            maxiter = 2
             call deigensolver_rmmdiis_min(gr, st, hm, eigens%pre, maxiter, eigens%converged(ik), ik)
           else
             call deigensolver_rmmdiis(gr, st, hm, eigens%pre, eigens%tolerance, maxiter, &
@@ -610,13 +622,17 @@ contains
         case(RS_FEAST)
           ! same as for ARPACK
           call messages_not_implemented('FEAST solver for Hermitian problems')
+        case(RS_PSD)
+          call deigensolver_rmmdiis_min(gr, st, hm, eigens%pre, maxiter, eigens%converged(ik), ik)
         end select
 
         ! FEAST: subspace diag or not?
-        if(eigens%es_type /= RS_RMMDIIS .and. eigens%es_type /= RS_ARPACK) then
-          call dsubspace_diag(eigens%sdiag, gr%der, st, hm, ik, st%eigenval(:, ik), eigens%diff(:, ik))
+        if(st%calc_eigenval) then
+          if(eigens%es_type /= RS_RMMDIIS .and. eigens%es_type /= RS_ARPACK .and. eigens%es_type /= RS_PSD) then
+            call dsubspace_diag(eigens%sdiag, gr%der, st, hm, ik, st%eigenval(:, ik), eigens%diff(:, ik))
+          end if
         end if
-
+        
       else
 
         select case(eigens%es_type)
@@ -635,6 +651,7 @@ contains
             eigens%converged(ik), ik, eigens%diff(:, ik), hm%d%block_size)
         case(RS_RMMDIIS)
           if(iter <= eigens%rmmdiis_minimization_iter) then
+            maxiter = 2
             call zeigensolver_rmmdiis_min(gr, st, hm, eigens%pre, maxiter, eigens%converged(ik), ik)
           else
             call zeigensolver_rmmdiis(gr, st, hm, eigens%pre, eigens%tolerance, maxiter, &
@@ -647,24 +664,30 @@ contains
 #endif 
         case(RS_FEAST)
           call zeigensolver_feast(eigens%feast, gr, st, hm, eigens%converged(ik), ik, eigens%diff(:, ik))
+        case(RS_PSD)
+          call zeigensolver_rmmdiis_min(gr, st, hm, eigens%pre, maxiter, eigens%converged(ik), ik)
         end select
 
-        if(eigens%es_type /= RS_RMMDIIS .and.eigens%es_type /= RS_ARPACK) then
-          call zsubspace_diag(eigens%sdiag, gr%der, st, hm, ik, st%eigenval(:, ik), eigens%diff(:, ik))
+        if(st%calc_eigenval) then
+          if(eigens%es_type /= RS_RMMDIIS .and. eigens%es_type /= RS_ARPACK .and. eigens%es_type /= RS_PSD) then
+            call zsubspace_diag(eigens%sdiag, gr%der, st, hm, ik, st%eigenval(:, ik), eigens%diff(:, ik))
+          end if
         end if
-
+        
       end if
 
-      ! recheck convergence after subspace diagonalization, since states may have reordered
-      eigens%converged(ik) = 0
-      do ist = 1, st%nst
-        if(eigens%diff(ist, ik) < eigens%tolerance) then
-          eigens%converged(ik) = ist
-        else
-          exit
-        end if
-      end do
-
+      if(st%calc_eigenval) then
+        ! recheck convergence after subspace diagonalization, since states may have reordered
+        eigens%converged(ik) = 0
+        do ist = 1, st%nst
+          if(eigens%diff(ist, ik) < eigens%tolerance) then
+            eigens%converged(ik) = ist
+          else
+            exit
+          end if
+        end do
+      end if
+      
       eigens%matvec = eigens%matvec + maxiter
     end do ik_loop
 
@@ -729,7 +752,7 @@ contains
     par_stat = .false.
 
     select case(this%es_type)
-    case(RS_RMMDIIS, RS_LOBPCG)
+    case(RS_RMMDIIS, RS_LOBPCG, RS_PSD)
       par_stat = .true.
     end select
 
@@ -763,7 +786,7 @@ contains
 #include "eigen_plan_inc.F90"
 #include "eigen_evolution_inc.F90"
 
-end module eigensolver_m
+end module eigensolver_oct_m
 
 
 !! Local Variables:

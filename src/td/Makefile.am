@@ -17,11 +17,11 @@
 ## Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 ## 02110-1301, USA.
 ##
-## $Id: Makefile.am 14744 2015-11-06 21:13:33Z philipp $
+## $Id: Makefile.am 15379 2016-05-23 15:04:27Z micael $
 
 noinst_LIBRARIES = libtd.a
 
-libtd_a_SOURCES =                         \
+libtd_a_SOURCES =                   \
 	pes.F90                           \
 	spectrum.F90                      \
 	td_calc.F90                       \
@@ -38,10 +38,12 @@ libtd_a_SOURCES =                         \
 	propagator_magnus.F90             \
 	propagator_qoct.F90               \
 	propagator_rk.F90                 \
-	propagator.F90
+	propagator.F90                    \
+  pes_out.F90
 
-noinst_HEADERS =                          \
-	pes_mask_out_inc.F90
+noinst_HEADERS =                    \
+	pes_mask_out_inc.F90              \
+  pes_flux_out_inc.F90   
 
 include $(srcdir)/../common-rules.make
 
@@ -51,7 +53,7 @@ depend:
 pes.o: pes.F90 pes_mask.o pes_spm.o pes_flux.o
 pes_spm.o : pes_spm.F90
 pes_mask.o : pes_mask.F90 pes_mask_out_inc.F90
-pes_flux.o : pes_flux.F90
+pes_flux.o : pes_flux.F90 pes_flux_out_inc.F90
 spectrum.o: spectrum.F90
 propagator_base.o : propagator_base.F90 potential_interpolation.o
 propagator_cn.o : propagator_cn.F90 propagator_base.o
@@ -63,3 +65,4 @@ propagator_rk.o : propagator_rk.F90 propagator_base.o
 propagator.o: propagator.F90 propagator_qoct.o propagator_rk.o propagator_cn.o propagator_magnus.o propagator_expmid.o propagator_etrs.o potential_interpolation.o propagator_base.o
 td_write.o: td_write.F90 spectrum.o td_calc.o
 td.o: td.F90 spectrum.o pes.o td_write.o propagator.o potential_interpolation.o
+pes_out.o: pes_out.F90

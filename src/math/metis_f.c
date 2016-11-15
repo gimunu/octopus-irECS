@@ -16,7 +16,7 @@
  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
  02110-1301, USA.
 
- $Id: metis_f.c 13166 2015-02-23 22:03:17Z dstrubbe $
+ $Id: metis_f.c 15053 2016-01-13 17:29:15Z dstrubbe $
 */
 
 
@@ -35,7 +35,7 @@
 
 #ifdef HAVE_METIS
 
-#ifdef METIS_USE_DOUBLEPRECISION
+#if defined(METIS_USE_DOUBLEPRECISION) || REALTYPEWIDTH == 64
   #error METIS must be compiled in single precision for Octopus.
 #endif
 

@@ -15,7 +15,7 @@
 !! Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 !! 02110-1301, USA.
 !!
-!! $Id: linear_solver_inc.F90 14976 2016-01-05 14:27:54Z xavier $
+!! $Id: linear_solver_inc.F90 15175 2016-03-03 22:51:08Z acastro $
 
 ! ---------------------------------------------------------
 !> This subroutine calculates the solution of (H + shift) x = y
@@ -56,22 +56,25 @@ subroutine X(linear_solver_solve_HXeY) (this, hm, gr, st, ist, ik, x, y, shift, 
 
   select case(this%solver)
 
-  case(LS_CG)
+  case(OPTION__LINEARSOLVER__CG)
     call X(linear_solver_cg)       (this, hm, gr, st, ist, ik, x, y, shift, tol, residue, iter_used)
 
-  case(LS_BICGSTAB)
+  case(OPTION__LINEARSOLVER__IDRS)
+    call X(linear_solver_idrs) (this, hm, gr, st, ist, ik, x, y, shift, tol, residue, iter_used)
+
+  case(OPTION__LINEARSOLVER__BICGSTAB)
     call X(linear_solver_bicgstab) (this, hm, gr, st, ist, ik, x, y, shift, tol, residue, iter_used, occ_response_)
 
-  case(LS_MULTIGRID)
+  case(OPTION__LINEARSOLVER__MULTIGRID)
     call X(linear_solver_multigrid)(this, hm, gr, st, ist, ik, x, y, shift, tol, residue, iter_used)
 
-  case(LS_QMR_SYMMETRIC)   
+  case(OPTION__LINEARSOLVER__QMR_SYMMETRIC)   
     ! complex symmetric: for Sternheimer, only if wfns are real
     call X(qmr_sym_gen_dotu)(gr%mesh%np, x(:, 1), y(:, 1), &
       X(linear_solver_operator_na), X(mf_dotu_aux), X(mf_nrm2_aux), X(linear_solver_preconditioner), &
       iter_used, residue = residue, threshold = tol, showprogress = .false.)
 
-  case(LS_QMR_SYMMETRIZED)
+  case(OPTION__LINEARSOLVER__QMR_SYMMETRIZED)
     ! symmetrized equation
     SAFE_ALLOCATE(z(1:gr%mesh%np, 1:1))
     call X(linear_solver_operator_t_na)(y(:, 1), z(:, 1))
@@ -79,19 +82,19 @@ subroutine X(linear_solver_solve_HXeY) (this, hm, gr, st, ist, ik, x, y, shift, 
       X(linear_solver_operator_sym_na), X(mf_dotu_aux), X(mf_nrm2_aux), X(linear_solver_preconditioner), &
       iter_used, residue = residue, threshold = tol, showprogress = .false.)
 
-  case(LS_QMR_DOTP)
+  case(OPTION__LINEARSOLVER__QMR_DOTP)
     ! using conjugated dot product
     call X(qmr_sym_gen_dotu)(gr%mesh%np, x(:, 1), y(:, 1), &
       X(linear_solver_operator_na), X(mf_dotp_aux), X(mf_nrm2_aux), X(linear_solver_preconditioner), &
       iter_used, residue = residue, threshold = tol, showprogress = .false.)
 
-  case(LS_QMR_GENERAL)
+  case(OPTION__LINEARSOLVER__QMR_GENERAL)
     ! general algorithm
     call X(qmr_gen_dotu)(gr%mesh%np, x(:, 1), y(:, 1), X(linear_solver_operator_na), X(linear_solver_operator_t_na), &
       X(mf_dotu_aux), X(mf_nrm2_aux), X(linear_solver_preconditioner), X(linear_solver_preconditioner), &
       iter_used, residue = residue, threshold = tol, showprogress = .false.)
 
-  case(LS_SOS)
+  case(OPTION__LINEARSOLVER__SOS)
     call X(linear_solver_sos)(hm, gr, st, ist, ik, x, y, shift, residue, iter_used)
 
   case default 
@@ -126,7 +129,8 @@ subroutine X(linear_solver_solve_HXeY_batch) (this, hm, gr, st, ik, xb, yb, shif
   PUSH_SUB(X(linear_solver_solve_HXeY_batch))
 
   select case(this%solver)
-  case(LS_QMR_DOTP)
+  case(OPTION__LINEARSOLVER__QMR_DOTP)
+
     call profiling_in(prof_batch, "LINEAR_SOLVER_BATCH")
     call X(linear_solver_qmr_dotp)(this, hm, gr, st, ik, xb, yb, shift, iter_used, residue, tol)
     call profiling_out(prof_batch)
@@ -219,6 +223,59 @@ subroutine X(linear_solver_cg) (ls, hm, gr, st, ist, ik, x, y, shift, tol, resid
 
   POP_SUB(X(linear_solver_cg))
 end subroutine X(linear_solver_cg)
+
+
+! ---------------------------------------------------------
+!> IDRS
+!> This is the "Induced Dimension Reduction", IDR(s) (for s=4). IDR(s) is a robust and efficient short recurrence 
+!> Krylov subspace method for solving large nonsymmetric systems of linear equations. It is described in 
+!> [Peter Sonneveld and Martin B. van Gijzen, SIAM J. Sci. Comput. 31, 1035 (2008)]. We have adapted the code
+!> released by M. B. van Gizjen [http://ta.twi.tudelft.nl/nw/users/gijzen/IDR.html].
+subroutine X(linear_solver_idrs) (ls, hm, gr, st, ist, ik, x, y, shift, tol, residue, iter_used)
+  type(linear_solver_t), intent(inout) :: ls
+  type(hamiltonian_t),   intent(in)    :: hm
+  type(grid_t),          intent(in)    :: gr
+  type(states_t),        intent(in)    :: st
+  integer,               intent(in)    :: ist
+  integer,               intent(in)    :: ik
+  R_TYPE,                intent(inout) :: x(:,:)   !< x(gr%mesh%np, st%d%dim)
+  R_TYPE,                intent(in)    :: y(:,:)   !< y(gr%mesh%np, st%d%dim)
+  R_TYPE,                intent(in)    :: shift
+  FLOAT,                 intent(in)    :: tol
+  FLOAT,                 intent(out)   :: residue
+  integer,               intent(out)   :: iter_used
+
+  integer :: s, info
+  R_TYPE, allocatable :: rhs(:, :), phi(:, :), x0(:, :)
+
+  PUSH_SUB(dlinear_solver_idrs)
+
+  SAFE_ALLOCATE(rhs(1:gr%mesh%np*st%d%dim, 1:1))
+  SAFE_ALLOCATE(phi(1:gr%mesh%np*st%d%dim, 1:1))
+  SAFE_ALLOCATE(x0(1:gr%mesh%np*st%d%dim, 1:1))
+
+  rhs(:, 1) = X(singledimarray)(gr%mesh%np*st%d%dim, y)
+  x0(:, 1)  = X(singledimarray)(gr%mesh%np*st%d%dim, x)
+
+  s = 4
+  info = -1
+  phi = X(idrs)(rhs, s, X(preconditioner), X(matrixvector), ddotproduct, zdotproduct, &
+    tol, ls%max_iter, x0 = x0, iterations = iter_used, flag = info, relres = residue)
+
+  x = X(doubledimarray)(gr%mesh%np, st%d%dim, phi(:, 1))
+
+  if(residue > tol .or. info .ne. 0) then
+    write(message(1), '(a)')     "IDRS solver failed."
+    write(message(2), '(a,i3)')  "Flag =,", info
+    call messages_warning(2)
+  end if
+
+  SAFE_DEALLOCATE_A(x0)
+  SAFE_DEALLOCATE_A(phi)
+  SAFE_DEALLOCATE_A(rhs)
+  POP_SUB(dlinear_solver_idrs)
+end subroutine X(linear_solver_idrs)
+
 
 ! ---------------------------------------------------------
 !> BICONJUGATE GRADIENTS STABILIZED
@@ -982,6 +1039,82 @@ subroutine X(linear_solver_qmr_dotp)(this, hm, gr, st, ik, xb, bb, shift, iter_u
 
   POP_SUB(X(linear_solver_qmr_dotp))
 end subroutine X(linear_solver_qmr_dotp)
+
+
+function X(singledimarray)(n, a)
+  integer, intent(in) :: n
+  R_TYPE, intent(in) :: a(:, :)
+  R_TYPE :: X(singledimarray)(n)
+  integer :: idim, np, dim
+  np = args%gr%mesh%np
+  dim = args%st%d%dim
+  do idim = 1, dim
+    X(singledimarray)((idim-1)*np+1: idim*np) = a(1:np, idim)
+  end do
+end function X(singledimarray)
+
+function X(doubledimarray)(np, dim, a)
+  integer, intent(in) :: np, dim
+  R_TYPE, intent(in) :: a(:)
+  R_TYPE :: X(doubledimarray)(np, dim)
+  integer :: idim
+  do idim = 1, dim
+    X(doubledimarray)(1:np, idim) = a((idim-1)*np+1: idim*np)
+  end do
+end function X(doubledimarray)
+
+R_TYPE function X(dotproduct)(a, b)
+  R_TYPE, intent(in) :: a(:), b(:)
+  X(dotproduct) = X(mf_dotp)(args%gr%mesh, args%st%d%dim, &
+    X(doubledimarray)(args%gr%mesh%np, args%st%d%dim, a), &
+    X(doubledimarray)(args%gr%mesh%np, args%st%d%dim, b))
+end function X(dotproduct)
+
+function X(matrixvector)( v ) 
+  R_TYPE, intent(in)       :: v(:, :)
+  R_TYPE                   :: X(matrixvector)(size(v, 1), size(v, 2))
+
+  integer :: np, np_part, dim
+  R_TYPE, allocatable :: phi(:, :)
+  R_TYPE, allocatable :: hphi(:, :)
+
+  np = args%gr%mesh%np
+  np_part = args%gr%mesh%np_part
+  dim = args%st%d%dim
+  SAFE_ALLOCATE(phi(1:np_part, 1:dim))
+  SAFE_ALLOCATE(hphi(1:np, 1:dim))
+  
+  phi = R_TOTYPE(M_ZERO)
+  phi(1:np, 1:dim) = X(doubledimarray)(np, dim, v(:, 1))
+  call X(linear_solver_operator) (args%hm, args%gr, args%st, args%ist, args%ik, args%X(shift), phi, hphi)
+  X(matrixvector)(1:np*dim, 1) = X(singledimarray)(np*dim, hphi)
+
+  SAFE_DEALLOCATE_A(phi)
+  SAFE_DEALLOCATE_A(hphi)
+end function X(matrixvector)
+
+function X(preconditioner)( v )
+  R_TYPE, dimension(:, :), intent(in)     :: v
+  R_TYPE, dimension(size(v, 1), size(v, 2)) :: X(preconditioner)
+
+  integer :: np, np_part, dim
+  R_TYPE, allocatable :: phi(:, :)
+  R_TYPE, allocatable :: precphi(:, :)
+
+  np = args%gr%mesh%np
+  np_part = args%gr%mesh%np_part
+  dim = args%st%d%dim
+  SAFE_ALLOCATE(phi(1:np_part, 1:dim))
+  SAFE_ALLOCATE(precphi(1:np, 1:dim))
+
+  phi = R_TOTYPE(M_ZERO)
+  phi(1:np, 1:dim) = X(doubledimarray)(np, dim, v(:, 1))
+  call X(preconditioner_apply)(args%ls%pre, args%gr, args%hm, args%ik, phi, precphi, args%X(shift))
+  X(preconditioner)(1:np*dim, 1) = X(singledimarray)(np*dim, precphi)
+
+  SAFE_DEALLOCATE_A(phi)
+  SAFE_DEALLOCATE_A(precphi)
+end function X(preconditioner)
 
 
 !! Local Variables:
